@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import sys
+
+from aiohttp import web
 
 from src.bot import create_bot, load_extensions
 from src.config import get_settings
@@ -12,6 +15,21 @@ from src.utils.logging import setup_logging
 
 logger = logging.getLogger("arena.main")
 
+
+async def health_check(request: web.Request) -> web.Response:
+    return web.Response(text="Algorithm Arena Bot is running!")
+
+async def start_web_server() -> None:
+    """Start a dummy web server so Render doesn't kill the service."""
+    app = web.Application()
+    app.router.add_get("/", health_check)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    
+    port = int(os.environ.get("PORT", 10000))
+    site = web.TCPSite(runner, "0.0.0.0", port)
+    await site.start()
+    logger.info("Dummy web server listening on port %s for Render health checks", port)
 
 async def _run() -> None:
     settings = get_settings()
@@ -30,6 +48,9 @@ async def _run() -> None:
         logger.info("Database layer initialised")
     else:
         logger.warning("DATABASE_URL not set — database features disabled")
+
+    # Start the dummy web server
+    await start_web_server()
 
     bot = create_bot()
 
