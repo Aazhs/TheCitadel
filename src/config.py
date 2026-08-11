@@ -25,6 +25,10 @@ class Settings(BaseSettings):
     environment: Literal["development", "staging", "production"] = "development"
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "INFO"
 
+    # Event lifecycle
+    event_check_interval_seconds: int = 60
+    submission_deadline_hours: int = 24
+
     model_config = {
         "env_file": ".env",
         "env_file_encoding": "utf-8",

@@ -37,7 +37,9 @@ def interaction():
 @pytest.mark.asyncio
 @patch("src.cogs.profile.fetch_user")
 @patch("src.cogs.profile.la_service")
-async def test_link_codeforces_success(mock_la_service, mock_fetch_user, cog, interaction):
+@patch("src.db.engine.get_session_factory")
+@patch("src.services.stats.recompute_member_stats", new_callable=AsyncMock)
+async def test_link_codeforces_success(mock_recompute, mock_get_session, mock_la_service, mock_fetch_user, cog, interaction):
     """Test linking a Codeforces account successfully."""
     cf_user = CodeforcesUser(
         handle="tourist",
@@ -50,14 +52,27 @@ async def test_link_codeforces_success(mock_la_service, mock_fetch_user, cog, in
     )
     mock_fetch_user.return_value = cf_user
 
-    mock_account = LinkedAccount(handle="tourist", profile_url="http://test")
+    mock_account = LinkedAccount(handle="tourist", profile_url="http://test", validation_status="validated")
     mock_la_service.link_account = AsyncMock(return_value=mock_account)
+    
+    # Mock db session for recompute
+    mock_session = AsyncMock()
+    mock_get_session.return_value.return_value.__aenter__.return_value = mock_session
 
-    await cog.link_codeforces.callback(cog, interaction, handle="tourist")
+    await cog.link.callback(cog, interaction, platform="codeforces", handle="tourist")
 
     interaction.response.defer.assert_called_once_with(ephemeral=True)
     mock_la_service.link_account.assert_called_once_with(
-        "111", "222", "codeforces", "tourist", cf_user
+        guild_id="111", 
+        user_id="222", 
+        platform="codeforces", 
+        handle="tourist", 
+        profile_url="https://codeforces.com/profile/tourist",
+        validation_status="validated",
+        current_rating=3900,
+        max_rating=4000,
+        global_rank=None,
+        extra_data=None,
     )
 
     # Verify success embed was sent
@@ -74,7 +89,7 @@ async def test_link_codeforces_not_found(mock_fetch_user, cog, interaction):
     """Test linking an invalid Codeforces handle."""
     mock_fetch_user.return_value = None
 
-    await cog.link_codeforces.callback(cog, interaction, handle="invalid")
+    await cog.link.callback(cog, interaction, platform="codeforces", handle="invalid")
 
     interaction.response.defer.assert_called_once_with(ephemeral=True)
 
@@ -86,9 +101,15 @@ async def test_link_codeforces_not_found(mock_fetch_user, cog, interaction):
 
 @pytest.mark.asyncio
 @patch("src.cogs.profile.la_service")
-async def test_unlink_success(mock_la_service, cog, interaction):
+@patch("src.db.engine.get_session_factory")
+@patch("src.services.stats.recompute_member_stats", new_callable=AsyncMock)
+async def test_unlink_success(mock_recompute, mock_get_session, mock_la_service, cog, interaction):
     """Test unlinking an account successfully."""
     mock_la_service.unlink_account = AsyncMock(return_value=True)
+    
+    # Mock db session for recompute
+    mock_session = AsyncMock()
+    mock_get_session.return_value.return_value.__aenter__.return_value = mock_session
 
     await cog.unlink.callback(cog, interaction, platform="codeforces")
 

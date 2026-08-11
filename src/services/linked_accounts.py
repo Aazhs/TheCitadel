@@ -20,7 +20,12 @@ async def link_account(
     user_id: str,
     platform: str,
     handle: str,
-    cf_user: CodeforcesUser | None = None,
+    profile_url: str,
+    validation_status: str = "pending",
+    current_rating: int | None = None,
+    max_rating: int | None = None,
+    global_rank: int | None = None,
+    extra_data: dict | None = None,
 ) -> LinkedAccount:
     """Create or update a linked account for a user in a guild.
 
@@ -31,9 +36,13 @@ async def link_account(
     Args:
         guild_id: Discord guild ID
         user_id: Discord user ID
-        platform: The platform (e.g., "codeforces")
+        platform: The platform (e.g., "codeforces", "codechef", "leetcode")
         handle: The user's handle on the platform
-        cf_user: Optional fetched Codeforces profile data to sync immediately
+        profile_url: Full URL to the user's profile
+        validation_status: Verification status
+        max_rating: Optional max rating
+        global_rank: Optional global rank
+        extra_data: Optional extra data dictionary
     """
     factory = get_session_factory()
     async with factory() as session:
@@ -82,29 +91,28 @@ async def link_account(
                 platform=platform,
                 handle=handle,
                 normalized_handle=normalized_handle,
-                profile_url=f"https://codeforces.com/profile/{handle}"
-                if platform == "codeforces"
-                else "",
-                validation_status="validated" if cf_user else "pending",
+                profile_url=profile_url,
+                validation_status=validation_status,
+                current_rating=current_rating,
+                max_rating=max_rating,
+                global_rank=global_rank,
+                extra_data=extra_data,
+                last_synced_at=now,
+                last_sync_status="success" if validation_status == "validated" else None,
             )
             session.add(account)
         else:
             account.handle = handle
             account.normalized_handle = normalized_handle
-            account.profile_url = (
-                f"https://codeforces.com/profile/{handle}" if platform == "codeforces" else ""
-            )
-            account.validation_status = "validated" if cf_user else "pending"
-
-        # Sync codeforces data if provided
-        if cf_user:
-            account.current_rating = cf_user.rating
-            account.max_rating = cf_user.max_rating
-            # For rank, we just store it as string for now in global_rank or omit it if we want integer.
-            # Codeforces ranks are strings (e.g. "expert"), we'll leave global_rank empty for now or parse it later
+            account.profile_url = profile_url
+            account.validation_status = validation_status
+            account.current_rating = current_rating
+            account.max_rating = max_rating
+            account.global_rank = global_rank
+            account.extra_data = extra_data
             account.last_synced_at = now
-            account.last_sync_status = "success"
-            account.last_sync_error = None
+            if validation_status == "validated":
+                account.last_sync_status = "success"
 
         # Mark as verified competitor
         member.verified_competitor = True

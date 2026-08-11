@@ -701,3 +701,112 @@ You can launch with these features alone:
 - Event leaderboard
 
 Everything else is an upgrade.
+
+---
+
+## Prompt: Multi-Platform Contest Discovery & Reminders — Codeforces, CodeChef, LeetCode
+
+> Extend the existing Codeforces contest sync to also fetch upcoming contests from CodeChef and LeetCode. All three platforms have regular weekly contests (LeetCode weekly/biweekly, CodeChef Starters on Wed, Long on weekends, etc.). The bot should sync all of them into the existing `Contest` table, show them in `/upcoming`, and send reminders to the server's contest alert channel before they start.
+
+### What Already Exists
+
+- `src/providers/codeforces.py` — `fetch_contests()` returns `list[CodeforcesContest]` from `codeforces.com/api/contest.list`
+- `src/services/contests.py` — `sync_codeforces_contests()` upserts into the `Contest` model (`platform`, `external_contest_id`, `name`, `url`, `start_time_utc`, `duration_seconds`, `phase`)
+- `src/cogs/contests.py` — background loop syncs CF every 6 hours, `/upcoming` shows next 5, `/refresh-contests` manual sync
+- `src/cogs/reminders.py` — delivers reminders for contests via the `contest_alert_channel`
+
+### New Providers
+
+#### `src/providers/codechef.py`
+
+```python
+# No auth needed for the contest list
+GET https://www.codechef.com/api/list/contests/all
+
+# Returns JSON:
+{
+  "future_contests": [
+    {
+      "contest_code": "START123",
+      "contest_name": "Starters 123",
+      "contest_start_date": "08 Aug 2026 14:30:00",
+      "contest_end_date": "08 Aug 2026 17:30:00",
+      "contest_duration": "180"  // minutes
+    }, ...
+  ],
+  "present_contests": [ ... ]
+}
+```
+
+- URL format: `https://www.codechef.com/{contest_code}`
+- Dataclass: `CodeChefContest(code, name, start_time, end_time, duration_minutes)`
+- Function: `async def fetch_contests() -> list[CodeChefContest] | None`
+
+#### `src/providers/leetcode.py`
+
+```python
+# No auth needed — public GraphQL
+POST https://leetcode.com/graphql
+Content-Type: application/json
+
+{
+  "query": "{ allContests { title titleSlug startTime duration } }"
+}
+
+# startTime is a Unix timestamp. Filter by startTime > now.
+```
+
+- Alternative (simpler): `GET https://leetcode.com/contest/api/list/` (undocumented but stable)
+- URL format: `https://leetcode.com/contest/{title_slug}`
+- Dataclass: `LeetCodeContest(title_slug, title, start_time, duration_seconds)`
+- Function: `async def fetch_contests() -> list[LeetCodeContest] | None`
+- **Important**: Add a `User-Agent` header — LeetCode blocks default Python UA
+
+### Service Changes
+
+#### `src/services/contests.py` — add two functions
+
+- `sync_codechef_contests(contests: list[CodeChefContest]) -> tuple[int, int]`
+- `sync_leetcode_contests(contests: list[LeetCodeContest]) -> tuple[int, int]`
+
+Same upsert pattern as `sync_codeforces_contests`. All write to the same `Contest` table with `platform = 'codechef'` / `'leetcode'`.
+
+### Cog Changes
+
+#### `src/cogs/contests.py`
+
+1. **Extend the sync loop** to also fetch CodeChef and LeetCode (isolate errors so one failure doesn't block others):
+   ```python
+   @tasks.loop(hours=6)
+   async def sync_contests_loop(self):
+       for name, fetcher, syncer in [
+           ("Codeforces", cf_provider.fetch_contests, contest_service.sync_codeforces_contests),
+           ("CodeChef", cc_provider.fetch_contests, contest_service.sync_codechef_contests),
+           ("LeetCode", lc_provider.fetch_contests, contest_service.sync_leetcode_contests),
+       ]:
+           try:
+               contests = await fetcher()
+               if contests:
+                   added, updated = await syncer(contests)
+                   logger.info("%s sync: %d added, %d updated", name, added, updated)
+           except Exception:
+               logger.exception("Error syncing %s contests", name)
+   ```
+
+2. **Update `/upcoming`** to show all platforms with emoji prefixes:
+   - 🟦 Codeforces  |  ⭐ CodeChef  |  🟡 LeetCode
+
+3. **Update `/refresh-contests`** to sync all three platforms
+
+### Reminders
+
+The existing `src/cogs/reminders.py` already delivers contest reminders. It should work out of the box once CodeChef and LeetCode contests are in the `Contest` table — just make sure the reminder delivery loop queries contests regardless of platform.
+
+### Implementation Notes
+
+- **No auth needed**: All three contest list endpoints are public
+- **Rate limits**: CF ~1 req/sec, CodeChef generous, LeetCode aggressive — add 1–2s `asyncio.sleep` between providers in the sync loop
+- **Error isolation**: Wrap each provider in its own try/except so one failure doesn't block others
+- **Dedup**: Upsert on `(platform, external_contest_id)` — already the existing pattern
+- **Testing**: Mock HTTP with `respx` for each provider. Record sample responses for fixture data
+- **Contest codes**: CF uses numeric IDs, CodeChef uses alphanumeric codes (`START123`), LeetCode uses slugs (`weekly-contest-410`)

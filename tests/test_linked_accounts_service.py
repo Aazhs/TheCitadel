@@ -76,20 +76,27 @@ async def test_link_account_new(mock_session_factory) -> None:
         title_photo=None,
         avatar=None,
     )
+    res = await la_service.link_account(
+        "111", 
+        "222", 
+        "codeforces", 
+        "tourist", 
+        profile_url="https://codeforces.com/profile/tourist",
+        validation_status="validated",
+        current_rating=3900,
+        max_rating=4000
+    )
 
-    account = await la_service.link_account("111", "222", "codeforces", "Tourist", cf_user)
-
-    # 4 rows should be added: GuildSettings, User, GuildMember, LinkedAccount
+    assert res.platform == "codeforces"
+    assert res.handle == "tourist"
+    assert res.normalized_handle == "tourist"
+    assert res.current_rating == 3900
+    
+    # 4 added things: gs, user, member, account
     assert len(fake_session.added) == 4
     assert any(isinstance(obj, GuildSettings) for obj in fake_session.added)
     assert any(isinstance(obj, User) for obj in fake_session.added)
     assert any(isinstance(obj, GuildMember) for obj in fake_session.added)
-
-    assert account.handle == "Tourist"
-    assert account.normalized_handle == "tourist"
-    assert account.platform == "codeforces"
-    assert account.current_rating == 3900
-    assert account.validation_status == "validated"
 
 
 @pytest.mark.asyncio
@@ -121,17 +128,16 @@ async def test_link_account_existing(mock_session_factory) -> None:
     fake_session = FakeAsyncSession(execute_result=MockResult())
     mock_session_factory.return_value.return_value = fake_session
 
-    cf_user = CodeforcesUser(
-        handle="new_handle",
-        rating=2000,
-        max_rating=2100,
-        rank="candidate master",
-        max_rank="master",
-        title_photo=None,
-        avatar=None,
+    res = await la_service.link_account(
+        "111", 
+        "222", 
+        "codeforces", 
+        "New_Handle", 
+        profile_url="https://codeforces.com/profile/new_handle",
+        validation_status="validated",
+        current_rating=2000,
+        max_rating=2100
     )
-
-    res = await la_service.link_account("111", "222", "codeforces", "New_Handle", cf_user)
 
     # Nothing new should be added
     assert len(fake_session.added) == 0

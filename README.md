@@ -19,6 +19,14 @@ A Discord competitive-programming bot.
 - `/reminders list` — List upcoming scheduled contest reminders
 - `/reminders enable` / `/reminders disable` — (Admin only) Toggle contest reminders
 - `/reminders test` — (Admin only) Send a test reminder to the alert channel
+- Weekly Coding Events — Create, publish, and manage custom server coding events with interactive registration
+- Event Lifecycle — Automatic state transitions: `draft → published → active → submission_open → finalized`
+- `/event-finalize` — (Admin only) Close submissions and finalize an event
+- Result Submissions — Self-reported results via Discord modal with moderator approval flow
+- `/submission-list` — (Admin only) List submissions for an event with optional status filter
+- `/submission-approve` — (Admin only) Approve a pending submission
+- `/submission-reject` — (Admin only) Reject a submission with required reason
+- Audit Logging — All moderator and lifecycle actions are logged for accountability
 - Structured logging with configurable log levels
 - Environment-based configuration with validation
 - Supabase PostgreSQL with SQLAlchemy async ORM
@@ -147,7 +155,11 @@ ruff format src/ tests/
 │   │   ├── admin_health.py  # /system-db-status command
 │   │   ├── setup.py         # /setup command group
 │   │   ├── onboarding.py    # /start + welcome messages
-│   │   └── profile.py       # Profile linking and viewing
+│   │   ├── profile.py       # Profile linking and viewing
+│   │   ├── events.py        # Event management commands and registration
+│   │   ├── recurring_events.py # Recurring event scheduling
+│   │   ├── lifecycle.py     # Background event lifecycle state machine
+│   │   └── submissions.py   # Result submission modal and admin commands
 │   ├── db/
 │   │   ├── __init__.py
 │   │   ├── base.py          # SQLAlchemy declarative base
@@ -157,7 +169,11 @@ ruff format src/ tests/
 │   │   ├── __init__.py
 │   │   ├── db_health.py     # Database health-check service
 │   │   ├── guild_settings.py # Guild configuration CRUD
-│   │   └── linked_accounts.py # Linked accounts CRUD
+│   │   ├── linked_accounts.py # Linked accounts CRUD
+│   │   ├── events.py        # Events service CRUD
+│   │   ├── lifecycle.py     # Event lifecycle transitions
+│   │   ├── submissions.py   # Submissions CRUD
+│   │   └── audit.py         # Audit logging
 │   ├── providers/
 │   │   ├── __init__.py
 │   │   └── codeforces.py    # Codeforces API client
@@ -180,7 +196,14 @@ ruff format src/ tests/
 │   ├── test_onboarding_cog.py  # Onboarding cog tests
 │   ├── test_codeforces_provider.py # CF provider tests
 │   ├── test_linked_accounts_service.py # Linked accounts tests
-│   └── test_profile_cog.py  # Profile cog tests
+│   ├── test_profile_cog.py  # Profile cog tests
+│   ├── test_events_models.py # Events database models tests
+│   ├── test_events_service.py # Events service tests
+│   ├── test_events_cog.py   # Events cog tests
+│   ├── test_audit_service.py # Audit service tests
+│   ├── test_submissions_service.py # Submissions service tests
+│   ├── test_lifecycle_service.py # Lifecycle service tests
+│   └── test_submissions_cog.py # Submissions cog tests
 ├── docs/
 │   ├── discord-bot-setup.md    # Developer setup guide
 │   └── server-configuration.md # Server admin guide

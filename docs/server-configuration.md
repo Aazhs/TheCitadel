@@ -69,7 +69,30 @@ The Citadel automatically syncs upcoming Codeforces contests behind the scenes (
 
 ---
 
-## 5. Channel Validation
+## 5. Events
+
+Administrators can schedule and host weekly coding events, custom practice sessions, and contest watch parties.
+
+### Admin Commands:
+- **`/event-create title type [platform] [official_url] start_time end_time description announcement_channel [discussion_channel] [results_channel]`**: Create a new event (starts in draft status). `type` is one of: `codeforces_contest`, `codechef_contest`, `leetcode_contest`, `custom_practice`, `daily_leetcode`. Times are in `YYYY-MM-DD HH:MM` format (UTC).
+- **`/event-publish event_id`**: Publish a draft event. Posts a rich embed with a Register button to the announcement channel. If a discussion channel is configured, posts a discussion starter message.
+- **`/event-cancel event_id`**: Cancel an event. Updates the announcement if one was posted.
+- **`/event-list`**: List all active events for this server.
+- **`/event-view event_id`**: View detailed event info including registration count.
+
+### Member Commands:
+- **`/register event_id`**: Register for a published event. For Codeforces events, requires a linked Codeforces account.
+- **`/my-events`**: Show events you're registered for.
+
+### Event Lifecycle:
+`draft` → `published` → `registration_open` → `active` → `ended`. Events can be cancelled from any non-ended state.
+
+### Registration via Button:
+When an event is published, the announcement embed includes a 'Register' button. Clicking it registers the member and gives an ephemeral confirmation. Registration is blocked after the deadline or if the event is cancelled.
+
+---
+
+## 6. Channel Validation
 
 Whenever an administrator configures a channel using `/setup onboarding-channel`, `/setup announcement-channel`, or `/setup contest-alert-channel`, The Citadel performs automatic permission validation:
 
@@ -78,7 +101,7 @@ Whenever an administrator configures a channel using `/setup onboarding-channel`
 
 ---
 
-## 6. Role Hierarchy Check
+## 7. Role Hierarchy Check
 
 When configuring an alert role with `/setup alert-role @role`, the bot checks Discord's role hierarchy:
 
@@ -87,7 +110,7 @@ When configuring an alert role with `/setup alert-role @role`, the bot checks Di
 
 ---
 
-## 7. Welcome Messages
+## 8. Welcome Messages
 
 The Citadel automates member onboarding when configured:
 
@@ -98,7 +121,7 @@ The Citadel automates member onboarding when configured:
 
 ---
 
-## 8. The `/start` Command
+## 9. The `/start` Command
 
 The `/start` command is available to all server members (not limited to administrators).
 
@@ -111,7 +134,7 @@ The `/start` command is available to all server members (not limited to administ
 
 ---
 
-## 9. Troubleshooting
+## 10. Troubleshooting
 
 If you encounter issues while using or configuring The Citadel, check the common resolution steps below:
 

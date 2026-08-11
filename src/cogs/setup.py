@@ -51,6 +51,28 @@ class ResetConfirmView(discord.ui.View):
 
 
 class SetupGroup(app_commands.Group):
+
+    @app_commands.command(name="reminders", description="Enable or disable automated contest reminders")
+    async def _reminders(self, interaction: discord.Interaction, enabled: bool) -> None:
+        if interaction.guild_id is None:
+            return
+        await interaction.response.defer(ephemeral=True)
+        await gs_service.update_reminders(str(interaction.guild_id), enabled)
+        status = "enabled" if enabled else "disabled"
+        await interaction.followup.send(f"✅ Automated contest reminders have been **{status}** for this server.")
+
+
+
+    @app_commands.command(name="auto-events", description="Enable or disable automatic weekly event creation")
+    async def _auto_events(self, interaction: discord.Interaction, enabled: bool) -> None:
+        if interaction.guild_id is None:
+            return
+        await interaction.response.defer(ephemeral=True)
+        await gs_service.update_auto_events(str(interaction.guild_id), enabled)
+        status = "enabled" if enabled else "disabled"
+        await interaction.followup.send(f"✅ Auto-Event Maker has been **{status}** for this server.")
+
+
     """Admin commands for configuring The Citadel in this server."""
 
     def __init__(self) -> None:
@@ -91,6 +113,11 @@ class Setup(commands.Cog):
         )(self._alert_role)
 
         self.setup_group.command(
+            name="timezone",
+            description="Set the server's local timezone (e.g., UTC, America/New_York, Asia/Kolkata)",
+        )(self._timezone)
+
+        self.setup_group.command(
             name="view",
             description="View current server configuration",
         )(self._view)
@@ -102,6 +129,50 @@ class Setup(commands.Cog):
 
         # Add the group to the bot's command tree
         bot.tree.add_command(self.setup_group)
+
+    @commands.Cog.listener()
+    async def on_guild_join(self, guild: discord.Guild) -> None:
+        """Auto-configure the server on join."""
+        logger.info(f"Joined new guild: {guild.name} ({guild.id})")
+        
+        # Check permissions
+        if not guild.me.guild_permissions.manage_channels:
+            logger.warning(f"Missing manage_channels permission in {guild.name} ({guild.id})")
+            return
+            
+        try:
+            # 1. Create Category
+            category = await guild.create_category("The Citadel")
+            
+            # 2. Create Channels
+            announcements_ch = await category.create_text_channel("announcements")
+            welcome_ch = await category.create_text_channel("welcome")
+            discussions_ch = await category.create_text_channel("discussions")
+            results_ch = await category.create_text_channel("results")
+            
+            # 3. Update DB
+            settings = await gs_service.get_or_create(str(guild.id))
+            await gs_service.update_channel(str(guild.id), "announcement_channel_id", str(announcements_ch.id))
+            await gs_service.update_channel(str(guild.id), "onboarding_channel_id", str(welcome_ch.id))
+            
+            # 4. Send Welcome Message
+            embed = discord.Embed(
+                title="🏰 The Citadel is Online",
+                description=(
+                    "Hello! I've automatically set up standard channels for you under the **The Citadel** category.\n\n"
+                    f"• {welcome_ch.mention} - for onboarding and welcome messages\n"
+                    f"• {announcements_ch.mention} - for event announcements and alerts\n"
+                    f"• {discussions_ch.mention} - for chatting about contests\n"
+                    f"• {results_ch.mention} - for leaderboard updates\n\n"
+                    "If you ever want to change these default channels, server administrators can use the `/setup` commands."
+                ),
+                color=discord.Color.green()
+            )
+            await announcements_ch.send(embed=embed)
+            
+        except Exception as e:
+            logger.error(f"Failed to auto-setup guild {guild.id}: {e}")
+
 
     async def cog_unload(self) -> None:
         """Remove the command group when the cog unloads."""
@@ -228,6 +299,38 @@ class Setup(commands.Cog):
         )
         await interaction.followup.send(msg, ephemeral=True)
 
+    # ── timezone ──────────────────────────────────────────────────────
+
+    async def _timezone(self, interaction: discord.Interaction, timezone: str) -> None:
+        """Validate and set the server timezone."""
+        assert interaction.guild is not None
+        await interaction.response.defer(ephemeral=True)
+
+        try:
+            import zoneinfo
+
+            zoneinfo.ZoneInfo(timezone)
+        except Exception:
+            await interaction.followup.send(
+                f"❌ **{timezone}** is not a valid IANA timezone name. "
+                "Examples: `UTC`, `America/New_York`, `Europe/London`, `Asia/Kolkata`.",
+                ephemeral=True,
+            )
+            return
+
+        await gs_service.update_timezone(str(interaction.guild.id), timezone)
+
+        logger.info(
+            "%s set timezone to %s in guild %s",
+            interaction.user,
+            timezone,
+            interaction.guild.id,
+        )
+        await interaction.followup.send(
+            f"✅ **Timezone** set to `{timezone}`",
+            ephemeral=True,
+        )
+
     # ── view ──────────────────────────────────────────────────────────
 
     async def _view(self, interaction: discord.Interaction) -> None:
@@ -278,6 +381,27 @@ class Setup(commands.Cog):
                 value=settings.timezone,
                 inline=True,
             )
+            embed.add_field(
+                name="Auto-Create Events",
+                value="✅ Enabled" if settings.auto_create_events else "❌ Disabled",
+                inline=True,
+            )
+            
+            last_run = "Never"
+            if settings.last_auto_event_run:
+                # Format datetime nicely
+                last_run = f"<t:{int(settings.last_auto_event_run.timestamp())}:R>"
+            
+            embed.add_field(
+                name="Last Auto-Event Run",
+                value=last_run,
+                inline=True,
+            )
+            embed.add_field(
+                name="Reminders",
+                value="✅ Enabled" if settings.reminders_enabled else "❌ Disabled",
+                inline=True,
+            )
 
         await interaction.followup.send(embed=embed, ephemeral=True)
 
@@ -295,7 +419,9 @@ class Setup(commands.Cog):
             "• Onboarding channel\n"
             "• Announcement channel\n"
             "• Contest alert channel\n"
-            "• Alert role\n\n"
+            "• Alert role\n"
+            "• Disable auto-events\n"
+            "• Enable default reminders\n\n"
             "User profiles and event data will **not** be deleted.",
             view=view,
             ephemeral=True,

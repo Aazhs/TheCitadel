@@ -1,0 +1,1 @@
+1 - each contests has a register button , basically while joining servr the user can select an option that will then auto register them on their prefereed shit

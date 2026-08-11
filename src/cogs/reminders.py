@@ -75,7 +75,9 @@ class Reminders(commands.Cog):
                     description=f"Starting in **{delivery.notification_type}**!",
                 )
                 embed.add_field(name="Platform", value=c.platform.title(), inline=True)
-                embed.add_field(name="Start Time", value=f"<t:{start_ts}:F> (<t:{start_ts}:R>)", inline=True)
+                embed.add_field(
+                    name="Start Time", value=f"<t:{start_ts}:F> (<t:{start_ts}:R>)", inline=True
+                )
                 if c.duration_seconds:
                     duration_hrs = c.duration_seconds / 3600
                     embed.add_field(name="Duration", value=f"{duration_hrs:g} hours", inline=True)
@@ -115,12 +117,14 @@ class Reminders(commands.Cog):
     async def status(self, interaction: discord.Interaction) -> None:
         """Check reminder status."""
         await interaction.response.defer(ephemeral=True)
-        
+
         settings = await guild_service.get_settings(str(interaction.guild_id))
 
         embed = discord.Embed(
             title="Contest Reminders Status",
-            color=discord.Color.green() if settings and settings.reminders_enabled else discord.Color.red()
+            color=discord.Color.green()
+            if settings and settings.reminders_enabled
+            else discord.Color.red(),
         )
 
         if not settings:
@@ -129,13 +133,13 @@ class Reminders(commands.Cog):
             return
 
         embed.add_field(
-            name="Enabled",
-            value="Yes" if settings.reminders_enabled else "No",
-            inline=False
+            name="Enabled", value="Yes" if settings.reminders_enabled else "No", inline=False
         )
 
         if settings.contest_alert_channel_id:
-            embed.add_field(name="Alert Channel", value=f"<#{settings.contest_alert_channel_id}>", inline=True)
+            embed.add_field(
+                name="Alert Channel", value=f"<#{settings.contest_alert_channel_id}>", inline=True
+            )
         else:
             embed.add_field(name="Alert Channel", value="Not set", inline=True)
 
@@ -150,11 +154,15 @@ class Reminders(commands.Cog):
     async def list_reminders(self, interaction: discord.Interaction) -> None:
         """List upcoming reminders for this server."""
         await interaction.response.defer(ephemeral=True)
-        
-        deliveries = await reminder_service.get_pending_deliveries_for_guild(str(interaction.guild_id))
-        
+
+        deliveries = await reminder_service.get_pending_deliveries_for_guild(
+            str(interaction.guild_id)
+        )
+
         if not deliveries:
-            await interaction.followup.send("There are currently no upcoming reminders scheduled for this server.")
+            await interaction.followup.send(
+                "There are currently no upcoming reminders scheduled for this server."
+            )
             return
 
         # Group deliveries by contest
@@ -162,28 +170,25 @@ class Reminders(commands.Cog):
         contests_dict = {}
         for d in deliveries:
             if d.contest_id not in contests_dict:
-                contests_dict[d.contest_id] = {
-                    "contest": d.contest,
-                    "reminders": []
-                }
+                contests_dict[d.contest_id] = {"contest": d.contest, "reminders": []}
             contests_dict[d.contest_id]["reminders"].append(d)
 
         embed = discord.Embed(
             title="Upcoming Contest Reminders",
             color=discord.Color.blue(),
-            description="Here are the upcoming reminders scheduled to be sent:"
+            description="Here are the upcoming reminders scheduled to be sent:",
         )
 
         for i, (cid, data) in enumerate(list(contests_dict.items())[:5]):
             c = data["contest"]
             start_ts = int(c.start_time_utc.timestamp())
-            
+
             # Format reminders
             reminder_times = []
             for d in data["reminders"]:
                 sched_ts = int(d.scheduled_for_utc.timestamp())
                 reminder_times.append(f"`{d.notification_type}` (<t:{sched_ts}:R>)")
-            
+
             val = f"**Platform:** {c.platform.title()}\n**Starts:** <t:{start_ts}:F> (<t:{start_ts}:R>)\n**Scheduled Alerts:** {', '.join(reminder_times)}"
             embed.add_field(name=c.name, value=val, inline=False)
 
@@ -219,7 +224,7 @@ class Reminders(commands.Cog):
     async def test_reminder(self, interaction: discord.Interaction) -> None:
         """Test the reminder format in the configured channel."""
         await interaction.response.defer(ephemeral=True)
-        
+
         settings = await guild_service.get_settings(str(interaction.guild_id))
 
         if not settings or not settings.contest_alert_channel_id:
@@ -251,7 +256,9 @@ class Reminders(commands.Cog):
         now_ts = int(datetime.now(UTC).timestamp())
         future_ts = now_ts + 600
 
-        embed.add_field(name="Start Time", value=f"<t:{future_ts}:F> (<t:{future_ts}:R>)", inline=True)
+        embed.add_field(
+            name="Start Time", value=f"<t:{future_ts}:F> (<t:{future_ts}:R>)", inline=True
+        )
         embed.add_field(name="Duration", value="2 hours", inline=True)
 
         content = ""

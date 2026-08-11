@@ -189,8 +189,8 @@ class TestViewCommand:
 
         call_kwargs = interaction.followup.send.call_args.kwargs
         embed = call_kwargs["embed"]
-        # Should have 5 fields: 3 channels + role + timezone
-        assert len(embed.fields) == 5
+        # Should have 8 fields: 3 channels + role + timezone + auto_events + last_run + reminders
+        assert len(embed.fields) == 8
 
 
 class TestAlertRole:

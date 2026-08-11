@@ -17,7 +17,20 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 from src.db.base import Base
 
 # Import all models so they register with Base.metadata
-from src.db.models import Contest, GuildMember, GuildSettings, LinkedAccount, User, NotificationDelivery  # noqa: F401
+from src.db.models import (  # noqa: F401
+    AuditLog,
+    Contest,
+    Event,
+    EventLeaderboardEntry,
+    EventRegistration,
+    EventSubmission,
+    GuildMember,
+    GuildSettings,
+    LinkedAccount,
+    NotificationDelivery,
+    
+    User,
+)
 
 # Load environment variables from .env file for local development
 try:

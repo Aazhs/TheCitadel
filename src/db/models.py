@@ -4,10 +4,21 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Index, Integer, String, UniqueConstraint, func
+from sqlalchemy import (
+    Boolean,
+    DateTime,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+    JSON,
+    func,
+)
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from src.db.base import Base
+from src.db.base import Base, PortableJSONB
 
 
 class GuildSettings(Base):
@@ -25,6 +36,8 @@ class GuildSettings(Base):
     contest_alert_channel_id: Mapped[str | None] = mapped_column(String(20), nullable=True)
     alert_role_id: Mapped[str | None] = mapped_column(String(20), nullable=True)
     reminders_enabled: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
+    auto_create_events: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    last_auto_event_run: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
@@ -36,9 +49,34 @@ class GuildSettings(Base):
     members: Mapped[list[GuildMember]] = relationship(
         "GuildMember", back_populates="guild_settings", cascade="all, delete-orphan"
     )
+    events: Mapped[list[Event]] = relationship(
+        "Event", back_populates="guild_settings", cascade="all, delete-orphan"
+    )
 
     def __repr__(self) -> str:
         return f"<GuildSettings(id={self.id}, guild={self.discord_guild_id})>"
+
+
+class GuildAdmin(Base):
+    """Admin access for the web dashboard."""
+
+    __tablename__ = "guild_admins"
+    __table_args__ = (UniqueConstraint("guild_settings_id", "discord_user_id", name="uq_guild_admin"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    guild_settings_id: Mapped[int] = mapped_column(
+        ForeignKey("guild_settings.id", ondelete="CASCADE"), nullable=False
+    )
+    discord_user_id: Mapped[str] = mapped_column(String(20), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+    # Relationships
+    guild_settings: Mapped[GuildSettings] = relationship("GuildSettings")
+
+    def __repr__(self) -> str:
+        return f"<GuildAdmin(id={self.id}, user={self.discord_user_id}, guild={self.guild_settings_id})>"
 
 
 class User(Base):
@@ -78,6 +116,20 @@ class GuildMember(Base):
     )
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
     verified_competitor: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    
+    # Leaderboard & Statistics
+    arena_points_all_time: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    arena_points_current_cycle: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    events_participated: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    verified_results_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    problems_solved_total: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    current_streak: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    longest_streak: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    
+    # Star Ratings
+    cp_star_rating: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    dsa_star_rating: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
@@ -90,6 +142,12 @@ class GuildMember(Base):
     user: Mapped[User] = relationship("User", back_populates="memberships")
     linked_accounts: Mapped[list[LinkedAccount]] = relationship(
         "LinkedAccount", back_populates="guild_member", cascade="all, delete-orphan"
+    )
+    event_registrations: Mapped[list[EventRegistration]] = relationship(
+        "EventRegistration", back_populates="guild_member", cascade="all, delete-orphan"
+    )
+    event_submissions: Mapped[list[EventSubmission]] = relationship(
+        "EventSubmission", back_populates="guild_member", cascade="all, delete-orphan"
     )
 
     def __repr__(self) -> str:
@@ -121,6 +179,7 @@ class LinkedAccount(Base):
     current_rating: Mapped[int | None] = mapped_column(Integer, nullable=True)
     max_rating: Mapped[int | None] = mapped_column(Integer, nullable=True)
     global_rank: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    extra_data: Mapped[dict | None] = mapped_column(JSON, nullable=True)
 
     last_synced_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     last_sync_status: Mapped[str | None] = mapped_column(String(20), nullable=True)
@@ -175,17 +234,28 @@ class NotificationDelivery(Base):
 
     __tablename__ = "notification_deliveries"
     __table_args__ = (
-        UniqueConstraint("guild_settings_id", "contest_id", "notification_type", name="uq_delivery_guild_contest_type"),
+        UniqueConstraint(
+            "guild_settings_id",
+            "contest_id",
+            "notification_type",
+            name="uq_delivery_guild_contest_type",
+        ),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
-    guild_settings_id: Mapped[int] = mapped_column(ForeignKey("guild_settings.id", ondelete="CASCADE"), nullable=False)
-    contest_id: Mapped[int] = mapped_column(ForeignKey("contests.id", ondelete="CASCADE"), nullable=False)
+    guild_settings_id: Mapped[int] = mapped_column(
+        ForeignKey("guild_settings.id", ondelete="CASCADE"), nullable=False
+    )
+    contest_id: Mapped[int] = mapped_column(
+        ForeignKey("contests.id", ondelete="CASCADE"), nullable=False
+    )
     notification_type: Mapped[str] = mapped_column(String(10), nullable=False)  # '24h', '1h', '10m'
 
     scheduled_for_utc: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    status: Mapped[str] = mapped_column(String(20), nullable=False, default="PENDING")  # 'PENDING', 'SENT', 'FAILED'
+    status: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="PENDING"
+    )  # 'PENDING', 'SENT', 'FAILED'
     discord_message_id: Mapped[str | None] = mapped_column(String(20), nullable=True)
     error_message: Mapped[str | None] = mapped_column(String(500), nullable=True)
 
@@ -195,3 +265,227 @@ class NotificationDelivery(Base):
 
     def __repr__(self) -> str:
         return f"<NotificationDelivery(id={self.id}, type={self.notification_type}, status={self.status})>"
+
+
+class Event(Base):
+    """An admin-created coding event (contest, watch party, practice session, etc.)."""
+
+    __tablename__ = "events"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    guild_settings_id: Mapped[int] = mapped_column(
+        ForeignKey("guild_settings.id", ondelete="CASCADE"), nullable=False
+    )
+    title: Mapped[str] = mapped_column(String(255), nullable=False)
+    event_type: Mapped[str] = mapped_column(String(50), nullable=False)
+    platform: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="draft")
+    description: Mapped[str] = mapped_column(Text, nullable=False)
+    official_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    start_time_utc: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    end_time_utc: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    registration_deadline_utc: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    submission_deadline_utc: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    results_require_moderator_approval: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default="true"
+    )
+    announcement_channel_id: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    discussion_channel_id: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    results_channel_id: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    announcement_message_id: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    points_config: Mapped[dict | None] = mapped_column(PortableJSONB, nullable=True)
+    created_by_discord_user_id: Mapped[str] = mapped_column(String(20), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+
+    # Relationships
+    guild_settings: Mapped[GuildSettings] = relationship("GuildSettings", back_populates="events")
+    registrations: Mapped[list[EventRegistration]] = relationship(
+        "EventRegistration", back_populates="event", cascade="all, delete-orphan"
+    )
+    submissions: Mapped[list[EventSubmission]] = relationship(
+        "EventSubmission", back_populates="event", cascade="all, delete-orphan"
+    )
+    leaderboard_entries: Mapped[list[EventLeaderboardEntry]] = relationship(
+        "EventLeaderboardEntry", back_populates="event", cascade="all, delete-orphan"
+    )
+
+    def __repr__(self) -> str:
+        return f"<Event(id={self.id}, title={self.title!r}, status={self.status})>"
+
+
+class EventRegistration(Base):
+    """A member's registration for a coding event."""
+
+    __tablename__ = "event_registrations"
+    __table_args__ = (
+        UniqueConstraint("event_id", "guild_member_id", name="uq_event_registration"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    event_id: Mapped[int] = mapped_column(
+        ForeignKey("events.id", ondelete="CASCADE"), nullable=False
+    )
+    guild_member_id: Mapped[int] = mapped_column(
+        ForeignKey("guild_members.id", ondelete="CASCADE"), nullable=False
+    )
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="registered")
+    registered_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+    # Relationships
+    event: Mapped[Event] = relationship("Event", back_populates="registrations")
+    guild_member: Mapped[GuildMember] = relationship(
+        "GuildMember", back_populates="event_registrations"
+    )
+
+    def __repr__(self) -> str:
+        return (
+            f"<EventRegistration(id={self.id}, event_id={self.event_id}, "
+            f"guild_member_id={self.guild_member_id})>"
+        )
+
+
+
+
+class EventSubmission(Base):
+    """A member's self-reported results for a coding event."""
+
+    __tablename__ = "event_submissions"
+    __table_args__ = (UniqueConstraint("event_id", "guild_member_id", name="uq_event_submission"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    event_id: Mapped[int] = mapped_column(
+        ForeignKey("events.id", ondelete="CASCADE"), nullable=False
+    )
+    guild_member_id: Mapped[int] = mapped_column(
+        ForeignKey("guild_members.id", ondelete="CASCADE"), nullable=False
+    )
+    questions_solved: Mapped[int] = mapped_column(Integer, nullable=False)
+    claimed_rank: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    claimed_rating_before: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    claimed_rating_after: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    claimed_rating_change: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    evidence_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    reflection: Mapped[str | None] = mapped_column(Text, nullable=True)
+    verification_status: Mapped[str] = mapped_column(String(20), nullable=False, default="pending")
+    submitted_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+    verified_by_discord_user_id: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    moderator_note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    points_awarded: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    score_breakdown: Mapped[dict | None] = mapped_column(PortableJSONB, nullable=True)
+
+    # Relationships
+    event: Mapped[Event] = relationship("Event", back_populates="submissions")
+    guild_member: Mapped[GuildMember] = relationship(
+        "GuildMember", back_populates="event_submissions"
+    )
+
+    def __repr__(self) -> str:
+        return (
+            f"<EventSubmission(id={self.id}, event_id={self.event_id}, "
+            f"status={self.verification_status})>"
+        )
+
+
+class EventLeaderboardEntry(Base):
+    """Computed leaderboard entry for a member in a specific event."""
+
+    __tablename__ = "event_leaderboard_entries"
+    __table_args__ = (
+        UniqueConstraint("event_id", "guild_member_id", name="uq_event_lb_entry"),
+        Index("ix_event_lb_event_rank", "event_id", "rank"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    event_id: Mapped[int] = mapped_column(
+        ForeignKey("events.id", ondelete="CASCADE"), nullable=False
+    )
+    guild_member_id: Mapped[int] = mapped_column(
+        ForeignKey("guild_members.id", ondelete="CASCADE"), nullable=False
+    )
+    rank: Mapped[int] = mapped_column(Integer, nullable=False)
+    total_points: Mapped[int] = mapped_column(Integer, nullable=False)
+    score_breakdown: Mapped[dict | None] = mapped_column(PortableJSONB, nullable=True)
+    is_final: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    computed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+    # Relationships
+    event: Mapped[Event] = relationship("Event", back_populates="leaderboard_entries")
+    guild_member: Mapped[GuildMember] = relationship("GuildMember")
+
+    def __repr__(self) -> str:
+        return (
+            f"<EventLeaderboardEntry(id={self.id}, event_id={self.event_id}, "
+            f"rank={self.rank}, points={self.total_points})>"
+        )
+
+
+class AuditLog(Base):
+    """Tracks moderator actions for accountability."""
+
+    __tablename__ = "audit_logs"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    guild_settings_id: Mapped[int] = mapped_column(
+        ForeignKey("guild_settings.id", ondelete="CASCADE"), nullable=False
+    )
+    action: Mapped[str] = mapped_column(String(100), nullable=False)
+    performed_by_discord_user_id: Mapped[str] = mapped_column(String(20), nullable=False)
+    target_type: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    target_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    details: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+    # Relationships
+    guild_settings: Mapped[GuildSettings] = relationship("GuildSettings")
+
+    def __repr__(self) -> str:
+        return f"<AuditLog(id={self.id}, action={self.action!r})>"
+
+
+class RoleMapping(Base):
+    """Configuration for server roles managed by the bot (ratings and achievements)."""
+
+    __tablename__ = "role_mappings"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    guild_settings_id: Mapped[int] = mapped_column(
+        ForeignKey("guild_settings.id", ondelete="CASCADE"), nullable=False
+    )
+    category: Mapped[str] = mapped_column(String(50), nullable=False)  # 'cp_rating', 'dsa_rating', 'achievement', 'champion'
+    min_value: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    role_id: Mapped[str] = mapped_column(String(20), nullable=False)
+    role_name_cache: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+
+    # Relationships
+    guild_settings: Mapped[GuildSettings] = relationship("GuildSettings")
+
+    def __repr__(self) -> str:
+        return f"<RoleMapping(id={self.id}, category={self.category}, role_id={self.role_id})>"

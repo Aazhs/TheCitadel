@@ -17,6 +17,12 @@ COG_EXTENSIONS: list[str] = [
     "src.cogs.profile",
     "src.cogs.contests",
     "src.cogs.reminders",
+    "src.cogs.events",
+    "src.cogs.lifecycle",
+    "src.cogs.submissions",
+    "src.cogs.leaderboard",
+    "src.cogs.stats",
+    "src.cogs.roles",
 ]
 
 

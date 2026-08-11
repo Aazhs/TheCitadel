@@ -43,6 +43,17 @@ async def get_settings(guild_id: str) -> GuildSettings | None:
         return result.scalar_one_or_none()
 
 
+async def update_timezone(guild_id: str, timezone: str) -> GuildSettings:
+    """Set the timezone for the guild."""
+    factory = get_session_factory()
+    async with factory() as session:
+        settings = await _ensure_row(session, guild_id)
+        settings.timezone = timezone
+        await session.commit()
+        await session.refresh(settings)
+        return settings
+
+
 async def update_channel(guild_id: str, field: str, channel_id: str) -> GuildSettings:
     """Set one of the channel columns and return the updated row.
 
@@ -103,6 +114,9 @@ async def reset_settings(guild_id: str) -> GuildSettings | None:
         settings.announcement_channel_id = None
         settings.contest_alert_channel_id = None
         settings.alert_role_id = None
+        settings.auto_create_events = False
+        settings.last_auto_event_run = None
+        settings.reminders_enabled = True
         await session.commit()
         await session.refresh(settings)
         logger.info("Reset guild_settings for guild %s", guild_id)
@@ -127,3 +141,31 @@ async def _ensure_row(session, guild_id: str) -> GuildSettings:  # type: ignore[
         session.add(settings)
         await session.flush()
     return settings
+
+
+async def update_auto_events(guild_id: str, enabled: bool) -> GuildSettings:
+    factory = get_session_factory()
+    async with factory() as session:
+        settings = await _ensure_row(session, guild_id)
+        settings.auto_create_events = enabled
+        await session.commit()
+        await session.refresh(settings)
+        return settings
+
+async def update_last_auto_event_run(guild_id: str, timestamp) -> GuildSettings:
+    factory = get_session_factory()
+    async with factory() as session:
+        settings = await _ensure_row(session, guild_id)
+        settings.last_auto_event_run = timestamp
+        await session.commit()
+        await session.refresh(settings)
+        return settings
+
+async def update_reminders(guild_id: str, enabled: bool) -> GuildSettings:
+    factory = get_session_factory()
+    async with factory() as session:
+        settings = await _ensure_row(session, guild_id)
+        settings.reminders_enabled = enabled
+        await session.commit()
+        await session.refresh(settings)
+        return settings

@@ -63,21 +63,27 @@ async def test_upcoming_with_contests(mock_service, cog, interaction):
 
     assert embed.title == "Upcoming Contests"
     assert len(embed.fields) == 1
-    assert embed.fields[0].name == "[Div. 2] Codeforces Round (Div. 2)"
-    assert "2h" in embed.fields[0].value
+    assert embed.fields[0].name == "🟦 Codeforces"
+    assert "[Div. 2] Codeforces Round (Div. 2)" in embed.fields[0].value
 
 
 @pytest.mark.asyncio
-@patch("src.cogs.contests.cf_provider")
+@patch("src.providers.leetcode.fetch_contests")
+@patch("src.providers.codechef.fetch_contests")
+@patch("src.providers.codeforces.fetch_contests")
 @patch("src.cogs.contests.contest_service")
-async def test_refresh_contests(mock_service, mock_provider, cog, interaction):
-    mock_provider.fetch_contests = AsyncMock(return_value=[MagicMock()])
+async def test_refresh_contests(mock_service, mock_cf, mock_cc, mock_lc, cog, interaction):
+    mock_cf.fetch_contests = AsyncMock(return_value=[MagicMock()])
+    mock_cc.fetch_contests = AsyncMock(return_value=[])
+    mock_lc.fetch_contests = AsyncMock(return_value=[])
+    
     mock_service.sync_codeforces_contests = AsyncMock(return_value=(2, 1))
 
-    await cog.refresh_codeforces.callback(cog, interaction)
+    await cog.refresh_contests.callback(cog, interaction)
 
-    interaction.response.defer.assert_called_once_with(ephemeral=True)
+    interaction.response.defer.assert_called_once()
     interaction.followup.send.assert_called_once()
-    args, _kwargs = interaction.followup.send.call_args
-    assert "Added **2**" in args[0]
-    assert "updated **1**" in args[0]
+    args, kwargs = interaction.followup.send.call_args
+    assert "Codeforces" in args[0]
+    assert "CodeChef" in args[0]
+    assert "LeetCode" in args[0]

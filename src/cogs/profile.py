@@ -20,44 +20,134 @@ class Profile(commands.Cog):
     def __init__(self, bot: commands.Bot) -> None:
         self.bot = bot
 
-    # ── /link-codeforces ──────────────────────────────────────────────
+    # ── /link ─────────────────────────────────────────────────────────
+
+    def _extract_handle(self, handle_or_url: str) -> str:
+        handle_or_url = handle_or_url.strip().rstrip("/")
+        if "/" in handle_or_url:
+            return handle_or_url.split("/")[-1]
+        return handle_or_url
 
     @app_commands.command(
-        name="link-codeforces",
-        description="Link your Codeforces account to your profile",
+        name="link",
+        description="Link a competitive programming account to your profile",
     )
-    @app_commands.describe(handle="Your exact Codeforces handle")
+    @app_commands.describe(
+        platform="The platform to link",
+        handle="Your handle or profile URL"
+    )
+    @app_commands.choices(
+        platform=[
+            app_commands.Choice(name="Codeforces", value="codeforces"),
+            app_commands.Choice(name="CodeChef", value="codechef"),
+            app_commands.Choice(name="LeetCode", value="leetcode"),
+        ]
+    )
     @app_commands.guild_only()
-    @app_commands.checks.cooldown(1, 30.0, key=lambda i: (i.guild_id, i.user.id))
-    async def link_codeforces(self, interaction: discord.Interaction, handle: str) -> None:
-        """Link a Codeforces account."""
+    @app_commands.checks.cooldown(1, 10.0, key=lambda i: (i.guild_id, i.user.id))
+    async def link(self, interaction: discord.Interaction, platform: str, handle: str) -> None:
+        """Link a competitive programming account."""
         assert interaction.guild is not None
         await interaction.response.defer(ephemeral=True)
+        
+        handle = self._extract_handle(handle)
 
         logger.info(
-            "%s is attempting to link Codeforces handle %r in guild %s",
+            "%s is attempting to link %s handle %r in guild %s",
             interaction.user,
+            platform,
             handle,
             interaction.guild.id,
         )
 
-        cf_user = await fetch_user(handle)
-        if cf_user is None:
-            await interaction.followup.send(
-                f"❌ **Link failed**: Could not find a Codeforces user with handle `{handle}`. "
-                f"Please check the spelling and try again.",
-                ephemeral=True,
-            )
-            return
+        validation_status = "unverified"
+        current_rating = None
+        max_rating = None
+        global_rank = None
+        extra_data = {}
+        profile_url = ""
+
+        if platform == "codeforces":
+            cf_user = await fetch_user(handle)
+            if cf_user is None:
+                await interaction.followup.send(
+                    f"❌ **Link failed**: Could not find a Codeforces user with handle `{handle}`.",
+                    ephemeral=True,
+                )
+                return
+            handle = cf_user.handle
+            current_rating = cf_user.rating
+            max_rating = cf_user.max_rating
+            validation_status = "validated"
+            profile_url = f"https://codeforces.com/profile/{handle}"
+            
+        elif platform == "codechef":
+            from src.providers.codechef import fetch_user as cc_fetch
+            cc_user = await cc_fetch(handle)
+            if cc_user is None:
+                await interaction.followup.send(
+                    f"❌ **Link failed**: Could not fetch CodeChef user `{handle}`.",
+                    ephemeral=True,
+                )
+                return
+            current_rating = cc_user.rating
+            max_rating = cc_user.max_rating
+            if cc_user.stars is not None:
+                extra_data["stars"] = cc_user.stars
+            validation_status = "validated"
+            profile_url = f"https://www.codechef.com/users/{handle}"
+            
+        elif platform == "leetcode":
+            from src.providers.leetcode import fetch_user_stats as lc_fetch
+            lc_user = await lc_fetch(handle)
+            # We use the fetch to at least verify the account exists. It also brings the rating.
+            if lc_user is None:
+                await interaction.followup.send(
+                    f"❌ **Link failed**: Could not find LeetCode user `{handle}`.",
+                    ephemeral=True,
+                )
+                return
+            current_rating = lc_user.rating
+            max_rating = lc_user.rating
+            global_rank = lc_user.global_rank
+            extra_data["easy_solved"] = lc_user.easy_solved
+            extra_data["medium_solved"] = lc_user.medium_solved
+            extra_data["hard_solved"] = lc_user.hard_solved
+            validation_status = "validated" # Assume validated
+            profile_url = f"https://leetcode.com/u/{handle}/"
 
         try:
             account = await la_service.link_account(
-                str(interaction.guild.id),
-                str(interaction.user.id),
-                "codeforces",
-                cf_user.handle,
-                cf_user,
+                guild_id=str(interaction.guild.id),
+                user_id=str(interaction.user.id),
+                platform=platform,
+                handle=handle,
+                profile_url=profile_url,
+                validation_status=validation_status,
+                current_rating=current_rating,
+                max_rating=max_rating,
+                global_rank=global_rank,
+                extra_data=extra_data if extra_data else None,
             )
+            
+            # Sync roles after linking
+            from src.db.engine import get_session_factory
+            from src.db.models import GuildSettings, User, GuildMember
+            from sqlalchemy import select
+            from src.services.stats import recompute_member_stats
+            
+            factory = get_session_factory()
+            async with factory() as session:
+                # Need to find the member ID
+                stmt = select(GuildMember.id).join(User).join(GuildSettings).where(
+                    GuildSettings.discord_guild_id == str(interaction.guild.id),
+                    User.discord_user_id == str(interaction.user.id)
+                )
+                member_id = await session.scalar(stmt)
+                if member_id:
+                    await recompute_member_stats(session, member_id)
+                    await session.commit()
+            
         except ValueError as e:
             await interaction.followup.send(f"❌ **Error**: {e}", ephemeral=True)
             return
@@ -70,30 +160,36 @@ class Profile(commands.Cog):
             return
 
         embed = discord.Embed(
-            title="✅ Codeforces Account Linked",
+            title=f"✅ {platform.title()} Account Linked",
             description=f"Successfully linked **{account.handle}** to your profile.",
             color=discord.Color.green(),
             url=account.profile_url,
         )
-        if cf_user.rating:
+        if current_rating:
             embed.add_field(
-                name="Rating", value=f"{cf_user.rating} (Max: {cf_user.max_rating})", inline=True
+                name="Rating", value=f"{current_rating}" + (f" (Max: {max_rating})" if max_rating else ""), inline=True
             )
-        if cf_user.rank:
-            embed.add_field(name="Rank", value=cf_user.rank.title(), inline=True)
-
-        if cf_user.avatar:
-            embed.set_thumbnail(url=cf_user.avatar)
+        if validation_status == "unverified":
+            embed.set_footer(text="Status: Unverified")
 
         await interaction.followup.send(embed=embed, ephemeral=True)
 
-    @link_codeforces.error
-    async def link_codeforces_error(
+    @app_commands.command(
+        name="link-codeforces",
+        description="Alias for /link platform:Codeforces",
+    )
+    @app_commands.describe(handle="Your exact Codeforces handle")
+    @app_commands.guild_only()
+    async def link_codeforces(self, interaction: discord.Interaction, handle: str) -> None:
+        """Alias for linking Codeforces."""
+        await self.link.callback(self, interaction, platform="codeforces", handle=handle)
+
+    @link.error
+    async def link_error(
         self, interaction: discord.Interaction, error: app_commands.AppCommandError
     ) -> None:
-        """Handle errors for /link-codeforces."""
+        """Handle errors for /link."""
         if isinstance(error, app_commands.CommandOnCooldown):
-            # If the command wasn't deferred yet, we must respond
             if not interaction.response.is_done():
                 await interaction.response.send_message(
                     f"⏳ You are on cooldown. Please try again in {error.retry_after:.1f} seconds.",
@@ -115,6 +211,8 @@ class Profile(commands.Cog):
     @app_commands.choices(
         platform=[
             app_commands.Choice(name="Codeforces", value="codeforces"),
+            app_commands.Choice(name="CodeChef", value="codechef"),
+            app_commands.Choice(name="LeetCode", value="leetcode"),
         ]
     )
     @app_commands.guild_only()
@@ -128,6 +226,24 @@ class Profile(commands.Cog):
         )
 
         if success:
+            # Sync roles after unlinking
+            from src.db.engine import get_session_factory
+            from src.db.models import GuildSettings, User, GuildMember
+            from sqlalchemy import select
+            from src.services.stats import recompute_member_stats
+            
+            factory = get_session_factory()
+            async with factory() as session:
+                # Need to find the member ID
+                stmt = select(GuildMember.id).join(User).join(GuildSettings).where(
+                    GuildSettings.discord_guild_id == str(interaction.guild.id),
+                    User.discord_user_id == str(interaction.user.id)
+                )
+                member_id = await session.scalar(stmt)
+                if member_id:
+                    await recompute_member_stats(session, member_id)
+                    await session.commit()
+                    
             await interaction.followup.send(
                 f"✅ Your **{platform.title()}** account has been unlinked.",
                 ephemeral=True,
@@ -188,14 +304,27 @@ class Profile(commands.Cog):
 
         for acc in accounts:
             val = f"**Handle:** [{acc.handle}]({acc.profile_url})\n"
+            val += f"**Status:** {'✅ Verified' if acc.validation_status == 'validated' else '⚠️ Unverified'}\n"
             if acc.current_rating is not None:
                 val += f"**Rating:** {acc.current_rating}\n"
             if acc.max_rating is not None:
                 val += f"**Max Rating:** {acc.max_rating}\n"
 
+            if acc.platform == "codechef" and acc.extra_data and "stars" in acc.extra_data:
+                val += f"**Stars:** {acc.extra_data['stars']}★\n"
+            
+            if acc.platform == "leetcode" and acc.extra_data:
+                if acc.global_rank:
+                    val += f"**Rank:** {acc.global_rank:,}\n"
+                easy = acc.extra_data.get('easy_solved', 0)
+                med = acc.extra_data.get('medium_solved', 0)
+                hard = acc.extra_data.get('hard_solved', 0)
+                if easy or med or hard:
+                    val += f"**Problems Solved:** {easy} Easy, {med} Medium, {hard} Hard\n"
+
             # Show last synced time if available
             if acc.last_synced_at:
-                val += f"*(Last synced: <t:{int(acc.last_synced_at.timestamp())}:R>)*"
+                val += f"*(Last synced: <t:{int(acc.last_synced_at.timestamp())}:R>)*\n"
 
             embed.add_field(
                 name=f"{acc.platform.title()}",

@@ -20,6 +20,7 @@ class FakeAsyncSession:
     async def execute(self, stmt):
         class MockExecuteResult:
             rowcount = 3 if "notification_deliveries" in str(stmt) else 0
+
         return MockExecuteResult()
 
     async def scalars(self, stmt):
@@ -42,10 +43,12 @@ class FakeAsyncSession:
     async def __aexit__(self, exc_type, exc_val, exc_tb):
         pass
 
+
 @pytest.fixture
 def mock_session_factory():
     with patch("src.services.reminders.get_session_factory") as mock:
         yield mock
+
 
 @pytest.mark.asyncio
 async def test_schedule_missing_deliveries_success(mock_session_factory):
@@ -68,6 +71,7 @@ async def test_schedule_missing_deliveries_success(mock_session_factory):
 
     scheduled = await schedule_missing_deliveries()
     assert scheduled == 3
+
 
 @pytest.mark.asyncio
 async def test_schedule_missing_deliveries_past_due(mock_session_factory):
@@ -93,6 +97,7 @@ async def test_schedule_missing_deliveries_past_due(mock_session_factory):
     # It executes the batch insert with just the 10m reminder, so rowcount might be 3 mock, but let's just ensure it runs
     assert scheduled == 3  # because of mock rowcount, but the logic didn't crash
 
+
 @pytest.mark.asyncio
 async def test_get_due_deliveries(mock_session_factory):
     d1 = NotificationDelivery(id=1, status="PENDING")
@@ -108,6 +113,7 @@ async def test_get_due_deliveries(mock_session_factory):
     assert len(due) == 1
     assert due[0].id == 1
 
+
 @pytest.mark.asyncio
 async def test_set_reminders_enabled(mock_session_factory):
     g1 = GuildSettings(id=1, discord_guild_id="123", reminders_enabled=False)
@@ -118,6 +124,7 @@ async def test_set_reminders_enabled(mock_session_factory):
     success = await set_reminders_enabled("123", True)
     assert success is True
     assert g1.reminders_enabled is True
+
 
 @pytest.mark.asyncio
 async def test_get_pending_deliveries_for_guild(mock_session_factory):

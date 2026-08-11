@@ -39,3 +39,17 @@ coverage.xml
 
 # Docker
 *.log
+
+# Databases
+*.db
+*.sqlite3
+
+# Next.js / Node
+node_modules/
+.next/
+out/
+.pnp
+.pnp.js
+coverage/
+.npm
+

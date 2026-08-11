@@ -110,48 +110,54 @@ class Onboarding(commands.Cog):
 
     @app_commands.command(
         name="start",
-        description="Get started with The Citadel — see your next steps",
+        description="Get started with Algorithm Arena — see your next steps",
     )
     @app_commands.guild_only()
     async def start(self, interaction: discord.Interaction) -> None:
         """Show an ephemeral onboarding guide for the member."""
         embed = discord.Embed(
-            title="🏰 Welcome to The Citadel",
-            description=("Here's how to make the most of your experience:\n"),
+            title="🏰 Welcome to Algorithm Arena",
+            description=("Here's how to make the most of your experience and climb the leaderboard:\n"),
             color=discord.Color.teal(),
         )
 
         embed.add_field(
-            name="🔗 Link Your Profiles",
+            name="🔗 1. Link Your Profiles",
             value=(
-                "Use `/link-codeforces` to connect your Codeforces account. "
-                "The community will be able to see your progress!\n"
-                "*(Support for other platforms coming soon)*"
+                "Use `/link` to connect your Codeforces, LeetCode, CodeChef, and AtCoder accounts. "
+                "The bot will automatically verify your ratings and give you special 1-5 Star Roles based on your tiers!"
             ),
             inline=False,
         )
 
         embed.add_field(
-            name="🔔 Contest Alerts",
+            name="⚔️ 2. Compete in Events",
             value=(
-                "Opt in to get notified before upcoming contests "
-                "so you never miss a round.\n"
-                "*Coming soon — stay tuned!*"
+                "When there's an active coding event or contest, use `/submit-results` after it finishes "
+                "to submit your performance. Moderators will verify it and award you Arena Points."
             ),
             inline=False,
         )
 
         embed.add_field(
-            name="📅 Upcoming Contests",
+            name="🏆 3. Climb the Leaderboard",
             value=(
-                "Check what contests are happening soon across "
-                "Codeforces and other platforms.\n"
-                "*Coming soon — stay tuned!*"
+                "Rack up points from participating in events and watch your name rise! "
+                "Use `/leaderboard` to check your rank in the current cycle."
             ),
             inline=False,
         )
 
-        embed.set_footer(text="More features are being built — watch this space!")
+        embed.add_field(
+            name="🔔 4. Stay Updated",
+            value=(
+                "Use `/reminders` to subscribe to contest alerts (24h, 1h, 10m before they start) "
+                "so you never miss an official round."
+            ),
+            inline=False,
+        )
+
+        embed.set_footer(text="Keep grinding and climb to the top! 🚀")
 
         logger.info("/start used by %s in guild %s", interaction.user, interaction.guild_id)
         await interaction.response.send_message(embed=embed, ephemeral=True)

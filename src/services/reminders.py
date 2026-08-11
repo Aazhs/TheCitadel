@@ -15,7 +15,7 @@ logger = logging.getLogger("arena.services.reminders")
 
 async def schedule_missing_deliveries() -> int:
     """Scan all upcoming contests and guilds to schedule missing reminders.
-    
+
     Returns:
         Number of new notification deliveries scheduled.
     """
@@ -61,13 +61,15 @@ async def schedule_missing_deliveries() -> int:
                     continue
 
                 for guild in guilds:
-                    deliveries.append({
-                        "guild_settings_id": guild.id,
-                        "contest_id": contest.id,
-                        "notification_type": n_type,
-                        "scheduled_for_utc": scheduled_for,
-                        "status": "PENDING"
-                    })
+                    deliveries.append(
+                        {
+                            "guild_settings_id": guild.id,
+                            "contest_id": contest.id,
+                            "notification_type": n_type,
+                            "scheduled_for_utc": scheduled_for,
+                            "status": "PENDING",
+                        }
+                    )
 
         if not deliveries:
             return 0
@@ -96,7 +98,10 @@ async def get_due_deliveries() -> list[NotificationDelivery]:
     async with get_session_factory()() as session:
         stmt = (
             select(NotificationDelivery)
-            .options(joinedload(NotificationDelivery.guild_settings), joinedload(NotificationDelivery.contest))
+            .options(
+                joinedload(NotificationDelivery.guild_settings),
+                joinedload(NotificationDelivery.contest),
+            )
             .where(NotificationDelivery.status == "PENDING")
             .where(NotificationDelivery.scheduled_for_utc <= now)
         )
@@ -122,7 +127,7 @@ async def mark_delivery_status(
     status: str,
     sent_at: datetime | None = None,
     message_id: str | None = None,
-    error: str | None = None
+    error: str | None = None,
 ) -> None:
     """Update the status of a notification delivery."""
     async with get_session_factory()() as session:
@@ -141,7 +146,7 @@ async def mark_delivery_status(
 
 async def set_reminders_enabled(guild_id: str, enabled: bool) -> bool:
     """Set whether contest reminders are enabled for a guild.
-    
+
     Returns:
         True if the guild settings were found and updated, False otherwise.
     """

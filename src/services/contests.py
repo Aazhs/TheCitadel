@@ -97,6 +97,106 @@ async def sync_codeforces_contests(cf_contests: list[CodeforcesContest]) -> tupl
 
     return added_count, updated_count
 
+async def sync_codechef_contests(cc_contests: list) -> tuple[int, int]:
+    """Sync CodeChef contests to the database."""
+    from src.providers.codechef import CodeChefContest
+    added_count = 0
+    updated_count = 0
+    now = datetime.now(UTC)
+    seven_days_ago = now - timedelta(days=7)
+    
+    relevant_contests = []
+    for c in cc_contests:
+        if c.end_time_utc > seven_days_ago:
+            phase = "BEFORE" if c.start_time_utc > now else "CODING" if c.end_time_utc > now else "FINISHED"
+            relevant_contests.append({
+                "platform": "codechef",
+                "external_contest_id": c.code,
+                "name": c.name,
+                "url": f"https://www.codechef.com/{c.code}",
+                "start_time_utc": c.start_time_utc,
+                "duration_seconds": c.duration_minutes * 60,
+                "phase": phase,
+                "updated_at": now,
+            })
+            
+    if not relevant_contests:
+        return 0, 0
+        
+    async with get_session_factory()() as session:
+        external_ids = [c["external_contest_id"] for c in relevant_contests]
+        stmt = select(Contest).where(Contest.platform == "codechef", Contest.external_contest_id.in_(external_ids))
+        result = await session.execute(stmt)
+        existing_contests = {c.external_contest_id: c for c in result.scalars().all()}
+        
+        for c_data in relevant_contests:
+            ext_id = c_data["external_contest_id"]
+            if ext_id in existing_contests:
+                existing = existing_contests[ext_id]
+                if (existing.phase != c_data["phase"] or existing.start_time_utc != c_data["start_time_utc"] or existing.name != c_data["name"]):
+                    existing.phase = c_data["phase"]
+                    existing.start_time_utc = c_data["start_time_utc"]
+                    existing.name = c_data["name"]
+                    existing.duration_seconds = c_data["duration_seconds"]
+                    existing.url = c_data["url"]
+                    updated_count += 1
+            else:
+                session.add(Contest(**c_data))
+                added_count += 1
+        await session.commit()
+    return added_count, updated_count
+
+async def sync_leetcode_contests(lc_contests: list) -> tuple[int, int]:
+    """Sync LeetCode contests to the database."""
+    from src.providers.leetcode import LeetCodeContest
+    added_count = 0
+    updated_count = 0
+    now = datetime.now(UTC)
+    seven_days_ago = now - timedelta(days=7)
+    
+    relevant_contests = []
+    for c in lc_contests:
+        start_dt = datetime.fromtimestamp(c.start_time_utc, tz=UTC)
+        end_dt = start_dt + timedelta(seconds=c.duration_seconds)
+        if end_dt > seven_days_ago:
+            phase = "BEFORE" if start_dt > now else "CODING" if end_dt > now else "FINISHED"
+            relevant_contests.append({
+                "platform": "leetcode",
+                "external_contest_id": c.title_slug,
+                "name": c.title,
+                "url": f"https://leetcode.com/contest/{c.title_slug}",
+                "start_time_utc": start_dt,
+                "duration_seconds": c.duration_seconds,
+                "phase": phase,
+                "updated_at": now,
+            })
+            
+    if not relevant_contests:
+        return 0, 0
+        
+    async with get_session_factory()() as session:
+        external_ids = [c["external_contest_id"] for c in relevant_contests]
+        stmt = select(Contest).where(Contest.platform == "leetcode", Contest.external_contest_id.in_(external_ids))
+        result = await session.execute(stmt)
+        existing_contests = {c.external_contest_id: c for c in result.scalars().all()}
+        
+        for c_data in relevant_contests:
+            ext_id = c_data["external_contest_id"]
+            if ext_id in existing_contests:
+                existing = existing_contests[ext_id]
+                if (existing.phase != c_data["phase"] or existing.start_time_utc != c_data["start_time_utc"] or existing.name != c_data["name"]):
+                    existing.phase = c_data["phase"]
+                    existing.start_time_utc = c_data["start_time_utc"]
+                    existing.name = c_data["name"]
+                    existing.duration_seconds = c_data["duration_seconds"]
+                    existing.url = c_data["url"]
+                    updated_count += 1
+            else:
+                session.add(Contest(**c_data))
+                added_count += 1
+        await session.commit()
+    return added_count, updated_count
+
 
 async def get_upcoming_contests(limit: int = 5) -> list[Contest]:
     """Get the next N upcoming contests across all platforms.

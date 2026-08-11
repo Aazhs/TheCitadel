@@ -32,7 +32,16 @@ async def _run() -> None:
         logger.warning("DATABASE_URL not set — database features disabled")
 
     bot = create_bot()
-    await load_extensions(bot)
+
+    @bot.event
+    async def setup_hook() -> None:
+        """Load extensions after the client is internally initialised.
+
+        This ensures that cog background tasks calling ``wait_until_ready()``
+        in their ``before_loop`` hooks don't blow up with
+        "Client has not been properly initialised".
+        """
+        await load_extensions(bot)
 
     try:
         async with bot:
