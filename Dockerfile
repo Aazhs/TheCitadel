@@ -2,12 +2,14 @@ FROM python:3.12-slim AS base
 
 WORKDIR /app
 
-# Install dependencies first for better layer caching
-COPY pyproject.toml .
+# Copy project files needed for installation
+COPY pyproject.toml README.md ./
+COPY src/ src/
+
+# Install dependencies and the project itself
 RUN pip install --no-cache-dir .
 
-# Copy source code and migrations
-COPY src/ src/
+# Copy remaining files
 COPY alembic.ini .
 COPY migrations/ migrations/
 
