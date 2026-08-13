@@ -37,6 +37,10 @@ def init_db(database_url: str) -> None:
         pool_size=5,
         max_overflow=10,
         pool_pre_ping=True,
+        connect_args={
+            "prepared_statement_cache_size": 0,
+            "statement_cache_size": 0,
+        }
     )
     _session_factory = async_sessionmaker(_engine, expire_on_commit=False)
     logger.info("Database engine initialised")
