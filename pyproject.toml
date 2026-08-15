@@ -3,9 +3,9 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "algorithm-arena-bot"
+name = "the-citadel-bot"
 version = "0.1.0"
-description = "A Discord competitive-programming bot for Algorithm Arena"
+description = "A Discord competitive-programming bot for The Citadel"
 requires-python = ">=3.12"
 readme = "README.md"
 license = "MIT"

@@ -1,4 +1,4 @@
-"""Pure scoring engine for Algorithm Arena events.
+"""Pure scoring engine for The Citadel events.
 
 All functions operate on plain dicts — no database or ORM imports.
 This keeps the scoring logic trivially testable.

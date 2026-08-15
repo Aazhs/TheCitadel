@@ -1,4 +1,4 @@
-"""Entry-point for Algorithm Arena Bot."""
+"""Entry-point for The Citadel Bot."""
 
 from __future__ import annotations
 
@@ -17,7 +17,7 @@ logger = logging.getLogger("arena.main")
 
 
 async def health_check(request: web.Request) -> web.Response:
-    return web.Response(text="Algorithm Arena Bot is running!")
+    return web.Response(text="The Citadel Bot is running!")
 
 async def start_web_server() -> None:
     """Start a dummy web server so Render doesn't kill the service."""
@@ -36,7 +36,7 @@ async def _run() -> None:
     setup_logging(level=settings.log_level)
 
     logger.info(
-        "Starting Algorithm Arena Bot — environment=%s",
+        "Starting The Citadel Bot — environment=%s",
         settings.environment,
     )
 

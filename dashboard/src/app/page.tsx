@@ -43,7 +43,7 @@ export default async function Home() {
   return (
     <div className="flex min-h-screen flex-col bg-gray-950 text-white">
       <header className="flex items-center justify-between border-b border-gray-800 bg-gray-900 px-6 py-4">
-        <h1 className="text-xl font-bold">Algorithm Arena</h1>
+        <h1 className="text-xl font-bold">The Citadel</h1>
         <div className="flex items-center gap-4">
           <div className="text-sm text-gray-400">{user.user_metadata?.full_name}</div>
           <form action="/auth/signout" method="post">

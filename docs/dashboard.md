@@ -1,6 +1,6 @@
-# Algorithm Arena Web Dashboard
+# The Citadel Web Dashboard
 
-This document outlines the setup and deployment of the Next.js 14 Web Dashboard for Algorithm Arena.
+This document outlines the setup and deployment of the Next.js 14 Web Dashboard for The Citadel.
 
 ## Prerequisites & Setup
 

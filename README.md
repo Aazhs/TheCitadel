@@ -73,8 +73,8 @@ python -m src.main
 ### 5. Run with Docker
 
 ```bash
-docker build -t algorithm-arena-bot .
-docker run --env-file .env algorithm-arena-bot
+docker build -t the-citadel-bot .
+docker run --env-file .env the-citadel-bot
 ```
 
 ## Supabase Setup
@@ -87,7 +87,7 @@ docker run --env-file .env algorithm-arena-bot
 6. Paste the full URI as `DATABASE_URL` in your `.env` file
 
 > **Tip:** For local development, you can also use a local PostgreSQL instance:
-> `DATABASE_URL=postgresql://postgres:password@localhost:5432/algorithm_arena`
+> `DATABASE_URL=postgresql://postgres:password@localhost:5432/the_citadel`
 
 ## Environment Variables
 

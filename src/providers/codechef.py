@@ -38,7 +38,7 @@ async def fetch_user(handle: str) -> CodeChefUser | None:
     import re
     url = f"https://www.codechef.com/users/{handle}"
     headers = {
-        "User-Agent": "Mozilla/5.0 (compatible; AlgorithmArenaBot/1.0)",
+        "User-Agent": "Mozilla/5.0 (compatible; TheCitadelBot/1.0)",
         "Accept": "text/html",
     }
     
@@ -91,7 +91,7 @@ async def fetch_contests() -> list[CodeChefContest] | None:
     
     # We use a user agent to prevent basic blocking
     headers = {
-        "User-Agent": "AlgorithmArenaBot/1.0",
+        "User-Agent": "TheCitadelBot/1.0",
         "Accept": "application/json",
     }
     

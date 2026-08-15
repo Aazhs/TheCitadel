@@ -1,4 +1,4 @@
-"""SQLAlchemy ORM models for Algorithm Arena."""
+"""SQLAlchemy ORM models for The Citadel."""
 
 from __future__ import annotations
 
@@ -105,7 +105,7 @@ class User(Base):
 
 
 class GuildMember(Base):
-    """Association between a user and a guild, with arena-specific state."""
+    """Association between a user and a guild, with Citadel-specific state."""
 
     __tablename__ = "guild_members"
     __table_args__ = (UniqueConstraint("guild_settings_id", "user_id", name="uq_guild_member"),)

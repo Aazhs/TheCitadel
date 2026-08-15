@@ -1,4 +1,4 @@
-"""Role synchronization engine for Algorithm Arena."""
+"""Role synchronization engine for The Citadel."""
 
 import logging
 from collections import defaultdict
@@ -106,7 +106,7 @@ async def sync_member_roles(
     # 3. Apply changes via Discord API
     if roles_to_add:
         try:
-            await discord_member.add_roles(*roles_to_add, reason="Algorithm Arena: Earned new roles")
+            await discord_member.add_roles(*roles_to_add, reason="The Citadel: Earned new roles")
             logger.info(f"Added roles {[r.name for r in roles_to_add]} to {discord_member.display_name}")
         except discord.Forbidden:
             logger.warning(f"Forbidden to add roles to {discord_member.display_name}. Hierarchy issue?")
@@ -115,7 +115,7 @@ async def sync_member_roles(
 
     if roles_to_remove:
         try:
-            await discord_member.remove_roles(*roles_to_remove, reason="Algorithm Arena: No longer qualifies for roles")
+            await discord_member.remove_roles(*roles_to_remove, reason="The Citadel: No longer qualifies for roles")
             logger.info(f"Removed roles {[r.name for r in roles_to_remove]} from {discord_member.display_name}")
         except discord.Forbidden:
             logger.warning(f"Forbidden to remove roles from {discord_member.display_name}. Hierarchy issue?")

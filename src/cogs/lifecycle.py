@@ -7,6 +7,7 @@ from discord.ext import commands, tasks
 from src.cogs.submissions import SubmitResultsView
 from src.config import get_settings
 from src.services import audit as audit_service
+from src.services import guild_settings as gs_service
 from src.services import lifecycle as lifecycle_service
 
 logger = logging.getLogger("arena.cogs.lifecycle")
@@ -54,7 +55,7 @@ class Lifecycle(commands.Cog):
                             )
                         else:
                             embed = discord.Embed(
-                                title="⚔️ The Arena is Open",
+                                title="⚔️ The Citadel — Contest Started",
                                 description=f"{event.title}\n{event.description or ''}",
                                 color=discord.Color.gold(),
                             )
@@ -63,7 +64,9 @@ class Lifecycle(commands.Cog):
                             embed.add_field(name="Start Time", value=f"<t:{start_ts}:F>")
                             embed.add_field(name="End Time", value=f"<t:{end_ts}:F>")
 
-                            await channel.send(embed=embed)
+                            settings = await gs_service.get_settings(str(event.guild_settings.discord_guild_id))
+                            content = f"<@&{settings.alert_role_id}>" if settings and settings.alert_role_id else ""
+                            await channel.send(content=content, embed=embed)
                     await audit_service.log_action(
                         event.guild_settings_id,
                         "activate_event",
@@ -96,7 +99,9 @@ class Lifecycle(commands.Cog):
                                 color=discord.Color.blue(),
                             )
                             view = SubmitResultsView(event.id)
-                            await channel.send(embed=embed, view=view)
+                            gs = await gs_service.get_settings(str(event.guild_settings.discord_guild_id))
+                            content = f"<@&{gs.alert_role_id}>" if gs and gs.alert_role_id else ""
+                            await channel.send(content=content, embed=embed, view=view)
                     await audit_service.log_action(
                         event.guild_settings_id,
                         "end_event",
@@ -119,7 +124,9 @@ class Lifecycle(commands.Cog):
                                 title="🔒 Submissions Closed",
                                 color=discord.Color.dark_grey(),
                             )
-                            await channel.send(embed=embed)
+                            gs = await gs_service.get_settings(str(event.guild_settings.discord_guild_id))
+                            content = f"<@&{gs.alert_role_id}>" if gs and gs.alert_role_id else ""
+                            await channel.send(content=content, embed=embed)
                     await audit_service.log_action(
                         event.guild_settings_id,
                         "finalize_event",

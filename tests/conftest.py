@@ -1,4 +1,4 @@
-"""Shared test fixtures for the Algorithm Arena test suite."""
+"""Shared test fixtures for The Citadel test suite."""
 
 from __future__ import annotations
 

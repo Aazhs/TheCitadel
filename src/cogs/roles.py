@@ -1,4 +1,4 @@
-"""Cog for managing Algorithm Arena role mappings and synchronization."""
+"""Cog for managing The Citadel role mappings and synchronization."""
 
 import logging
 from typing import Literal
@@ -22,7 +22,7 @@ class Roles(commands.Cog):
     def __init__(self, bot: commands.Bot) -> None:
         self.bot = bot
 
-    role_group = app_commands.Group(name="role-map", description="Manage Algorithm Arena role mappings")
+    role_group = app_commands.Group(name="role-map", description="Manage The Citadel role mappings")
 
     @role_group.command(name="view", description="View current role mappings.")
     @app_commands.guild_only()
@@ -44,7 +44,7 @@ class Roles(commands.Cog):
                 await interaction.followup.send("No role mappings configured.")
                 return
                 
-            embed = discord.Embed(title="Algorithm Arena Role Mappings", color=discord.Color.blue())
+            embed = discord.Embed(title="The Citadel Role Mappings", color=discord.Color.blue())
             
             for category, category_mappings in mappings.items():
                 lines = []
@@ -212,7 +212,7 @@ class Roles(commands.Cog):
                                 name=role_name,
                                 color=color,
                                 hoist=True,
-                                reason="Algorithm Arena auto-setup"
+                                reason="The Citadel auto-setup"
                             )
                             created_count += 1
                         except discord.Forbidden:

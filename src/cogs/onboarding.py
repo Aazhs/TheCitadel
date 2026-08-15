@@ -110,13 +110,13 @@ class Onboarding(commands.Cog):
 
     @app_commands.command(
         name="start",
-        description="Get started with Algorithm Arena — see your next steps",
+        description="Get started with The Citadel — see your next steps",
     )
     @app_commands.guild_only()
     async def start(self, interaction: discord.Interaction) -> None:
         """Show an ephemeral onboarding guide for the member."""
         embed = discord.Embed(
-            title="🏰 Welcome to Algorithm Arena",
+            title="🏰 Welcome to The Citadel",
             description=("Here's how to make the most of your experience and climb the leaderboard:\n"),
             color=discord.Color.teal(),
         )
@@ -134,7 +134,7 @@ class Onboarding(commands.Cog):
             name="⚔️ 2. Compete in Events",
             value=(
                 "When there's an active coding event or contest, use `/submit-results` after it finishes "
-                "to submit your performance. Moderators will verify it and award you Arena Points."
+                "to submit your performance. Moderators will verify it and award you Citadel Points."
             ),
             inline=False,
         )

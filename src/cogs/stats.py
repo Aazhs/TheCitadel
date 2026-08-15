@@ -98,7 +98,7 @@ class Stats(commands.Cog):
 
     @app_commands.command(
         name="my-stats",
-        description="View your personal Algorithm Arena statistics.",
+        description="View your personal Citadel statistics.",
     )
     @app_commands.guild_only()
     async def my_stats(self, interaction: discord.Interaction) -> None:
@@ -137,8 +137,8 @@ class Stats(commands.Cog):
             embed.add_field(name="DSA Star Rating", value=f"{'⭐' * member.dsa_star_rating if member.dsa_star_rating else 'Unrated'}", inline=True)
             embed.add_field(name="Events Participated", value=str(member.events_participated), inline=True)
             
-            embed.add_field(name="Arena Points (All-Time)", value=str(member.arena_points_all_time), inline=True)
-            embed.add_field(name="Arena Points (Cycle)", value=str(member.arena_points_current_cycle), inline=True)
+            embed.add_field(name="Citadel Points (All-Time)", value=str(member.arena_points_all_time), inline=True)
+            embed.add_field(name="Citadel Points (Cycle)", value=str(member.arena_points_current_cycle), inline=True)
             embed.add_field(name="Problems Solved", value=str(member.problems_solved_total), inline=True)
             
             embed.add_field(name="Current Streak", value=f"{member.current_streak} events", inline=True)

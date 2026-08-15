@@ -24,7 +24,7 @@ async def fetch_user_stats(handle: str) -> LeetCodeUserStats | None:
     url = "https://leetcode.com/graphql"
     headers = {
         "Content-Type": "application/json",
-        "User-Agent": "AlgorithmArenaBot/1.0",
+        "User-Agent": "TheCitadelBot/1.0",
     }
     
     # We query both the profile (for solved counts) and contest history (for rating)
@@ -114,7 +114,7 @@ async def fetch_contests() -> list[LeetCodeContest] | None:
     url = "https://leetcode.com/graphql"
     headers = {
         "Content-Type": "application/json",
-        "User-Agent": "AlgorithmArenaBot/1.0",
+        "User-Agent": "TheCitadelBot/1.0",
     }
     
     query = """

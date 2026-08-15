@@ -17,7 +17,7 @@ export default function LoginPage() {
     <div className="flex min-h-screen items-center justify-center bg-gray-950">
       <div className="w-full max-w-md rounded-lg border border-gray-800 bg-gray-900 p-8 shadow-xl">
         <div className="mb-8 text-center">
-          <h1 className="text-3xl font-bold text-white">Algorithm Arena</h1>
+          <h1 className="text-3xl font-bold text-white">The Citadel</h1>
           <p className="mt-2 text-gray-400">Admin Dashboard</p>
         </div>
         
