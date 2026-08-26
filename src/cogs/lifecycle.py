@@ -35,7 +35,7 @@ class Lifecycle(commands.Cog):
         """Background task that manages event lifecycle state transitions."""
         try:
             now = datetime.now(UTC)
-            settings = get_settings()
+            app_settings = get_settings()
 
             # 1. Activate events
             events_to_activate = await lifecycle_service.get_events_to_activate(now)
@@ -64,8 +64,8 @@ class Lifecycle(commands.Cog):
                             embed.add_field(name="Start Time", value=f"<t:{start_ts}:F>")
                             embed.add_field(name="End Time", value=f"<t:{end_ts}:F>")
 
-                            settings = await gs_service.get_settings(str(event.guild_settings.discord_guild_id))
-                            content = f"<@&{settings.alert_role_id}>" if settings and settings.alert_role_id else ""
+                            guild_settings = await gs_service.get_settings(str(event.guild_settings.discord_guild_id))
+                            content = f"<@&{guild_settings.alert_role_id}>" if guild_settings and guild_settings.alert_role_id else ""
                             await channel.send(content=content, embed=embed)
                     await audit_service.log_action(
                         event.guild_settings_id,
@@ -81,7 +81,7 @@ class Lifecycle(commands.Cog):
             events_to_end = await lifecycle_service.get_events_to_end(now)
             for event in events_to_end:
                 try:
-                    await lifecycle_service.end_event(event.id, settings.submission_deadline_hours)
+                    await lifecycle_service.end_event(event.id, app_settings.submission_deadline_hours)
                     if not event.results_channel_id:
                         logger.warning("No results channel for event %s", event.id)
                     else:
@@ -95,7 +95,7 @@ class Lifecycle(commands.Cog):
                         else:
                             embed = discord.Embed(
                                 title="🏁 Contest Ended — Submit Your Results",
-                                description=f"The event has ended. You have {settings.submission_deadline_hours} hours to submit your results.",
+                                description=f"The event has ended. You have {app_settings.submission_deadline_hours} hours to submit your results.",
                                 color=discord.Color.blue(),
                             )
                             view = SubmitResultsView(event.id)

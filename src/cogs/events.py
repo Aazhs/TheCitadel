@@ -88,19 +88,36 @@ async def _update_event_message(
 
 
 def _parse_datetime(value: str, tz_name: str) -> datetime:
-    """Parse a datetime string in YYYY-MM-DD HH:MM format in the given timezone, return as UTC.
+    """Parse a datetime string in the given timezone, return as UTC.
+
+    Supports multiple formats:
+    - ``YYYY-MM-DD HH:MM``       (24-hour, e.g. 20:00 for 8 PM)
+    - ``YYYY-MM-DD HH:MM AM/PM`` (12-hour, e.g. 8:00 PM)
+    - ``YYYY-MM-DD H:MM AM/PM``  (12-hour without leading zero)
 
     Raises:
-        ValueError: If the string is not in the expected format.
+        ValueError: If the string doesn't match any supported format.
     """
-    try:
-        dt = datetime.strptime(value.strip(), "%Y-%m-%d %H:%M")
-        tz = zoneinfo.ZoneInfo(tz_name)
-        return dt.replace(tzinfo=tz).astimezone(UTC)
-    except ValueError:
-        raise ValueError(
-            f"Invalid datetime format: {value!r}. Use `YYYY-MM-DD HH:MM` (Local Time)."
-        ) from None
+    formats = [
+        "%Y-%m-%d %H:%M",      # 24-hour: 2026-08-28 20:00
+        "%Y-%m-%d %I:%M %p",   # 12-hour: 2026-08-28 8:00 PM
+        "%Y-%m-%d %I:%M%p",    # 12-hour no space: 2026-08-28 8:00PM
+    ]
+    value = value.strip()
+    tz = zoneinfo.ZoneInfo(tz_name)
+
+    for fmt in formats:
+        try:
+            dt = datetime.strptime(value, fmt)
+            return dt.replace(tzinfo=tz).astimezone(UTC)
+        except ValueError:
+            continue
+
+    raise ValueError(
+        f"Invalid datetime: `{value}`.\n"
+        "Use **24-hour format**: `YYYY-MM-DD HH:MM` (e.g. `2026-08-28 20:00` for 8 PM)\n"
+        "Or **12-hour format**: `YYYY-MM-DD HH:MM AM/PM` (e.g. `2026-08-28 8:00 PM`)"
+    )
 
 
 # ── Helper: build event embed ────────────────────────────────────────
@@ -144,7 +161,7 @@ def _build_event_embed(event: object, *, registration_count: int | None = None) 
         title=event.title,
         description=event.description,
         color=color_map.get(event.status, discord.Color.blurple()),
-        url=event.official_url,
+        url=event.official_url if event.official_url else None,
     )
 
     embed.add_field(
@@ -278,8 +295,12 @@ class Events(commands.Cog):
             return
 
         embed = _build_event_embed(event)
+        start_ts = int(start_dt.timestamp())
+        end_ts = int(end_dt.timestamp())
         await interaction.followup.send(
-            f"✅ Event **{event.title}** created (ID: `{event.id}`). "
+            f"✅ Event **{event.title}** created (ID: `{event.id}`).\n"
+            f"📅 Start: <t:{start_ts}:F> — End: <t:{end_ts}:F>\n"
+            f"*(Verify the times above are correct before publishing!)*\n\n"
             f"Use `/event-publish event_id:{event.id}` to announce it.",
             embed=embed,
             ephemeral=True,

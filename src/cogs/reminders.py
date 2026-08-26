@@ -12,6 +12,27 @@ from src.services import reminders as reminder_service
 
 logger = logging.getLogger("arena.cogs.reminders")
 
+# Human-friendly labels for notification types
+_NOTIF_LABELS = {
+    "24h": "24 hours",
+    "1h": "1 hour",
+    "10m": "10 minutes",
+}
+
+# Platform colors for reminder embeds
+_PLATFORM_COLORS = {
+    "codeforces": discord.Color.blue(),
+    "codechef": discord.Color.orange(),
+    "leetcode": discord.Color.yellow(),
+}
+
+# Platform emojis
+_PLATFORM_EMOJIS = {
+    "codeforces": "🟦",
+    "codechef": "⭐",
+    "leetcode": "🟡",
+}
+
 
 class Reminders(commands.Cog):
     """Cog for managing and delivering automated contest reminders."""
@@ -34,7 +55,8 @@ class Reminders(commands.Cog):
             # First, ensure all upcoming contests have reminders scheduled
             await reminder_service.schedule_missing_deliveries()
 
-            # Second, fetch any deliveries that are due right now
+            # Second, fetch any deliveries that are due right now.
+            # get_due_deliveries() returns plain DeliveryInfo dataclasses, safe after session close.
             due_deliveries = await reminder_service.get_due_deliveries()
             if not due_deliveries:
                 return
@@ -42,23 +64,20 @@ class Reminders(commands.Cog):
             now = datetime.now(UTC)
 
             for delivery in due_deliveries:
-                guild_id = delivery.guild_settings.discord_guild_id
-                channel_id = delivery.guild_settings.contest_alert_channel_id
-
-                if not channel_id:
+                if not delivery.channel_id:
                     await reminder_service.mark_delivery_status(
                         delivery.id, "FAILED", error="No alert channel configured"
                     )
                     continue
 
-                guild = self.bot.get_guild(int(guild_id))
+                guild = self.bot.get_guild(int(delivery.guild_id))
                 if not guild:
                     await reminder_service.mark_delivery_status(
                         delivery.id, "FAILED", error="Guild not found"
                     )
                     continue
 
-                channel = guild.get_channel(int(channel_id))
+                channel = guild.get_channel(int(delivery.channel_id))
                 if not channel or not isinstance(channel, discord.TextChannel):
                     await reminder_service.mark_delivery_status(
                         delivery.id, "FAILED", error="Alert channel not found or not a text channel"
@@ -66,32 +85,57 @@ class Reminders(commands.Cog):
                     continue
 
                 # Build the embed
-                c = delivery.contest
-                start_ts = int(c.start_time_utc.timestamp())
+                start_ts = int(delivery.contest_start_utc.timestamp())
+                label = _NOTIF_LABELS.get(delivery.notification_type, delivery.notification_type)
+                platform_emoji = _PLATFORM_EMOJIS.get(delivery.contest_platform, "🏆")
+                embed_color = _PLATFORM_COLORS.get(delivery.contest_platform, discord.Color.brand_red())
+
                 embed = discord.Embed(
-                    title=c.name,
-                    url=c.url,
-                    color=discord.Color.brand_red(),
-                    description=f"Starting in **{delivery.notification_type}**!",
+                    title=f"{platform_emoji} {delivery.contest_name}",
+                    url=delivery.contest_url or None,
+                    color=embed_color,
+                    description=f"⏰ Starting in **{label}**!",
                 )
-                embed.add_field(name="Platform", value=c.platform.title(), inline=True)
                 embed.add_field(
-                    name="Start Time", value=f"<t:{start_ts}:F> (<t:{start_ts}:R>)", inline=True
+                    name="Platform",
+                    value=delivery.contest_platform.title(),
+                    inline=True,
                 )
-                if c.duration_seconds:
-                    duration_hrs = c.duration_seconds / 3600
-                    embed.add_field(name="Duration", value=f"{duration_hrs:g} hours", inline=True)
+                embed.add_field(
+                    name="Start Time",
+                    value=f"<t:{start_ts}:F> (<t:{start_ts}:R>)",
+                    inline=True,
+                )
+                if delivery.contest_duration_seconds:
+                    total_mins = delivery.contest_duration_seconds // 60
+                    hours, mins = divmod(total_mins, 60)
+                    dur_str = f"{hours}h {mins}m" if mins else f"{hours}h"
+                    embed.add_field(name="Duration", value=dur_str, inline=True)
+
+                if delivery.contest_url:
+                    embed.add_field(
+                        name="Link",
+                        value=f"[Join Contest]({delivery.contest_url})",
+                        inline=False,
+                    )
+
+                embed.set_footer(text="The Citadel Contest Alerts")
 
                 # Format ping
                 content = ""
-                role_id = delivery.guild_settings.alert_role_id
-                if role_id:
-                    content = f"<@&{role_id}>"
+                if delivery.alert_role_id:
+                    content = f"<@&{delivery.alert_role_id}>"
 
                 try:
                     msg = await channel.send(content=content, embed=embed)
                     await reminder_service.mark_delivery_status(
                         delivery.id, "SENT", sent_at=now, message_id=str(msg.id)
+                    )
+                    logger.info(
+                        "Sent %s reminder for '%s' to guild %s",
+                        delivery.notification_type,
+                        delivery.contest_name,
+                        delivery.guild_id,
                     )
                 except discord.Forbidden:
                     await reminder_service.mark_delivery_status(
@@ -133,7 +177,7 @@ class Reminders(commands.Cog):
             return
 
         embed.add_field(
-            name="Enabled", value="Yes" if settings.reminders_enabled else "No", inline=False
+            name="Enabled", value="✅ Yes" if settings.reminders_enabled else "❌ No", inline=False
         )
 
         if settings.contest_alert_channel_id:
@@ -141,18 +185,18 @@ class Reminders(commands.Cog):
                 name="Alert Channel", value=f"<#{settings.contest_alert_channel_id}>", inline=True
             )
         else:
-            embed.add_field(name="Alert Channel", value="Not set", inline=True)
+            embed.add_field(name="Alert Channel", value="*Not set*", inline=True)
 
         if settings.alert_role_id:
             embed.add_field(name="Alert Role", value=f"<@&{settings.alert_role_id}>", inline=True)
         else:
-            embed.add_field(name="Alert Role", value="Not set", inline=True)
+            embed.add_field(name="Alert Role", value="*Not set*", inline=True)
 
         await interaction.followup.send(embed=embed)
 
     @group.command(name="list", description="List upcoming scheduled contest reminders")
     async def list_reminders(self, interaction: discord.Interaction) -> None:
-        """List upcoming reminders for this server."""
+        """List upcoming reminders for this server (sorted by time)."""
         await interaction.response.defer(ephemeral=True)
 
         deliveries = await reminder_service.get_pending_deliveries_for_guild(
@@ -165,32 +209,36 @@ class Reminders(commands.Cog):
             )
             return
 
-        # Group deliveries by contest
-        # We can just show the next 5 contests to avoid hitting embed limits
-        contests_dict = {}
+        # Group deliveries by contest, preserving time order
+        contests_dict: dict = {}
         for d in deliveries:
-            if d.contest_id not in contests_dict:
-                contests_dict[d.contest_id] = {"contest": d.contest, "reminders": []}
-            contests_dict[d.contest_id]["reminders"].append(d)
+            cid = d["contest_id"]
+            if cid not in contests_dict:
+                contests_dict[cid] = {"contest": d["contest_name"], "platform": d["contest_platform"], "start": d["contest_start_utc"], "reminders": []}
+            contests_dict[cid]["reminders"].append(d)
 
         embed = discord.Embed(
             title="Upcoming Contest Reminders",
             color=discord.Color.blue(),
-            description="Here are the upcoming reminders scheduled to be sent:",
+            description="Reminders scheduled to be sent (sorted by soonest first):",
         )
 
         for i, (cid, data) in enumerate(list(contests_dict.items())[:5]):
-            c = data["contest"]
-            start_ts = int(c.start_time_utc.timestamp())
+            start_ts = int(data["start"].timestamp())
+            platform_emoji = _PLATFORM_EMOJIS.get(data["platform"], "🏆")
 
-            # Format reminders
             reminder_times = []
             for d in data["reminders"]:
-                sched_ts = int(d.scheduled_for_utc.timestamp())
-                reminder_times.append(f"`{d.notification_type}` (<t:{sched_ts}:R>)")
+                sched_ts = int(d["scheduled_for_utc"].timestamp())
+                label = _NOTIF_LABELS.get(d["notification_type"], d["notification_type"])
+                reminder_times.append(f"`{label}` (<t:{sched_ts}:R>)")
 
-            val = f"**Platform:** {c.platform.title()}\n**Starts:** <t:{start_ts}:F> (<t:{start_ts}:R>)\n**Scheduled Alerts:** {', '.join(reminder_times)}"
-            embed.add_field(name=c.name, value=val, inline=False)
+            val = (
+                f"**Platform:** {platform_emoji} {data['platform'].title()}\n"
+                f"**Starts:** <t:{start_ts}:F> (<t:{start_ts}:R>)\n"
+                f"**Alerts:** {', '.join(reminder_times)}"
+            )
+            embed.add_field(name=data["contest"], value=val, inline=False)
 
         if len(contests_dict) > 5:
             embed.set_footer(text=f"And {len(contests_dict) - 5} more contests...")
@@ -204,7 +252,7 @@ class Reminders(commands.Cog):
         await interaction.response.defer(ephemeral=True)
         success = await reminder_service.set_reminders_enabled(str(interaction.guild_id), True)
         if success:
-            await interaction.followup.send("Contest reminders are now **enabled**.")
+            await interaction.followup.send("✅ Contest reminders are now **enabled**.")
         else:
             await interaction.followup.send("Please configure the bot with `/setup` first.")
 
@@ -215,7 +263,7 @@ class Reminders(commands.Cog):
         await interaction.response.defer(ephemeral=True)
         success = await reminder_service.set_reminders_enabled(str(interaction.guild_id), False)
         if success:
-            await interaction.followup.send("Contest reminders are now **disabled**.")
+            await interaction.followup.send("✅ Contest reminders are now **disabled**.")
         else:
             await interaction.followup.send("Please configure the bot with `/setup` first.")
 
@@ -245,21 +293,22 @@ class Reminders(commands.Cog):
             )
             return
 
-        embed = discord.Embed(
-            title="Test Contest (Div. 1)",
-            url="https://codeforces.com/contests",
-            color=discord.Color.brand_red(),
-            description="Starting in **10m**!",
-        )
-        embed.add_field(name="Platform", value="Codeforces", inline=True)
-
         now_ts = int(datetime.now(UTC).timestamp())
         future_ts = now_ts + 600
 
+        embed = discord.Embed(
+            title="🟦 Test Contest — Codeforces Round (Div. 2)",
+            url="https://codeforces.com/contests",
+            color=discord.Color.blue(),
+            description="⏰ Starting in **10 minutes**!",
+        )
+        embed.add_field(name="Platform", value="Codeforces", inline=True)
         embed.add_field(
             name="Start Time", value=f"<t:{future_ts}:F> (<t:{future_ts}:R>)", inline=True
         )
-        embed.add_field(name="Duration", value="2 hours", inline=True)
+        embed.add_field(name="Duration", value="2h", inline=True)
+        embed.add_field(name="Link", value="[Join Contest](https://codeforces.com/contests)", inline=False)
+        embed.set_footer(text="The Citadel Contest Alerts")
 
         content = ""
         if settings.alert_role_id:
@@ -267,7 +316,9 @@ class Reminders(commands.Cog):
 
         try:
             await channel.send(content=content, embed=embed)
-            await interaction.followup.send("Test reminder sent successfully!")
+            await interaction.followup.send(
+                f"✅ Test reminder sent to {channel.mention}!"
+            )
         except discord.Forbidden:
             await interaction.followup.send(
                 "Failed to send test reminder: The bot does not have Send Messages permission in that channel."

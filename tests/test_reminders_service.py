@@ -5,11 +5,32 @@ import pytest
 
 from src.db.models import Contest, GuildSettings, NotificationDelivery
 from src.services.reminders import (
+    DeliveryInfo,
     get_due_deliveries,
     get_pending_deliveries_for_guild,
     schedule_missing_deliveries,
     set_reminders_enabled,
 )
+
+
+def _make_delivery_info(**kwargs) -> DeliveryInfo:
+    """Build a DeliveryInfo with sensible defaults for tests."""
+    defaults = dict(
+        id=1,
+        notification_type="24h",
+        scheduled_for_utc=datetime.now(UTC),
+        guild_id="123",
+        channel_id="456",
+        alert_role_id="789",
+        contest_id=1,
+        contest_name="Test Contest",
+        contest_url="https://codeforces.com/contest/1",
+        contest_platform="codeforces",
+        contest_start_utc=datetime.now(UTC) + timedelta(hours=24),
+        contest_duration_seconds=7200,
+    )
+    defaults.update(kwargs)
+    return DeliveryInfo(**defaults)
 
 
 class FakeAsyncSession:
@@ -100,7 +121,16 @@ async def test_schedule_missing_deliveries_past_due(mock_session_factory):
 
 @pytest.mark.asyncio
 async def test_get_due_deliveries(mock_session_factory):
-    d1 = NotificationDelivery(id=1, status="PENDING")
+    """get_due_deliveries should return DeliveryInfo dataclasses, not ORM objects."""
+    now = datetime.now(UTC)
+
+    gs = GuildSettings(id=1, discord_guild_id="123", contest_alert_channel_id="456", alert_role_id="789")
+    c = Contest(id=1, name="Test", platform="codeforces", start_time_utc=now + timedelta(hours=24),
+                url="https://codeforces.com/contest/1", duration_seconds=7200)
+    d1 = NotificationDelivery(id=1, status="PENDING", notification_type="24h",
+                               scheduled_for_utc=now)
+    d1.guild_settings = gs
+    d1.contest = c
 
     class MockResult:
         def all(self):
@@ -111,7 +141,14 @@ async def test_get_due_deliveries(mock_session_factory):
 
     due = await get_due_deliveries()
     assert len(due) == 1
-    assert due[0].id == 1
+    info = due[0]
+    assert isinstance(info, DeliveryInfo)
+    assert info.id == 1
+    assert info.guild_id == "123"
+    assert info.channel_id == "456"
+    assert info.alert_role_id == "789"
+    assert info.contest_name == "Test"
+    assert info.contest_platform == "codeforces"
 
 
 @pytest.mark.asyncio
@@ -128,7 +165,14 @@ async def test_set_reminders_enabled(mock_session_factory):
 
 @pytest.mark.asyncio
 async def test_get_pending_deliveries_for_guild(mock_session_factory):
-    d1 = NotificationDelivery(id=1, status="PENDING")
+    """get_pending_deliveries_for_guild should return plain dicts."""
+    now = datetime.now(UTC)
+
+    c = Contest(id=1, name="Test Contest", platform="codeforces",
+                start_time_utc=now + timedelta(hours=24))
+    d1 = NotificationDelivery(id=1, status="PENDING", notification_type="24h",
+                               scheduled_for_utc=now)
+    d1.contest = c
 
     class MockResult:
         def all(self):
@@ -139,4 +183,8 @@ async def test_get_pending_deliveries_for_guild(mock_session_factory):
 
     due = await get_pending_deliveries_for_guild("123")
     assert len(due) == 1
-    assert due[0].id == 1
+    d = due[0]
+    assert isinstance(d, dict)
+    assert d["id"] == 1
+    assert d["contest_name"] == "Test Contest"
+    assert d["contest_platform"] == "codeforces"

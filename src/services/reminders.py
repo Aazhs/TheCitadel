@@ -1,6 +1,7 @@
 """Service for managing automated contest reminders."""
 
 import logging
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import select
@@ -11,6 +12,24 @@ from src.db.engine import get_session_factory
 from src.db.models import Contest, GuildSettings, NotificationDelivery
 
 logger = logging.getLogger("arena.services.reminders")
+
+
+@dataclass
+class DeliveryInfo:
+    """A plain-data snapshot of a NotificationDelivery row, safe to use after session close."""
+
+    id: int
+    notification_type: str
+    scheduled_for_utc: datetime
+    guild_id: str
+    channel_id: str | None
+    alert_role_id: str | None
+    contest_id: int
+    contest_name: str
+    contest_url: str
+    contest_platform: str
+    contest_start_utc: datetime
+    contest_duration_seconds: int | None
 
 
 async def schedule_missing_deliveries() -> int:
@@ -37,7 +56,7 @@ async def schedule_missing_deliveries() -> int:
         if not guilds:
             return 0
 
-        # For each contest + guild combination, insert the 3 reminder types if they don't exist
+        # For each contest + guild combination, insert the 3 reminder types if they don't exist.
         # We use an UPSERT (ON CONFLICT DO NOTHING) because we have a unique constraint.
         reminder_types = [
             ("24h", timedelta(hours=24)),
@@ -45,19 +64,14 @@ async def schedule_missing_deliveries() -> int:
             ("10m", timedelta(minutes=10)),
         ]
 
-        # Batch insert using PostgreSQL's ON CONFLICT DO NOTHING
         deliveries = []
         for contest in upcoming_contests:
             for n_type, offset in reminder_types:
                 scheduled_for = contest.start_time_utc - offset
 
-                # If it's already past due for scheduling (e.g. contest starts in 5 mins and this is the 1h reminder),
-                # we do NOT schedule it if it's already past by a large margin.
-                # Actually, the background worker handles sending due reminders,
-                # but we shouldn't schedule a 24h reminder if the contest is in 5 mins.
+                # If the window is already past by more than 1 hour, skip to avoid flooding
+                # stale reminders.
                 if scheduled_for < now - timedelta(hours=1):
-                    # If we missed the window by more than 1 hour, don't schedule it retroactively
-                    # to prevent a flood of stale reminders.
                     continue
 
                 for guild in guilds:
@@ -86,13 +100,18 @@ async def schedule_missing_deliveries() -> int:
         scheduled_count = result.rowcount
 
     if scheduled_count > 0:
-        logger.info(f"Scheduled {scheduled_count} new contest reminders")
+        logger.info("Scheduled %d new contest reminders", scheduled_count)
 
     return scheduled_count
 
 
-async def get_due_deliveries() -> list[NotificationDelivery]:
-    """Get all pending notification deliveries that are due to be sent."""
+async def get_due_deliveries() -> list[DeliveryInfo]:
+    """Get all pending notification deliveries that are due to be sent.
+
+    Returns plain DeliveryInfo dataclasses so they're safe to use after the session closes.
+    This fixes the DetachedInstanceError that occurred when the cog accessed ORM
+    relationships after the session closed.
+    """
     now = datetime.now(UTC)
 
     async with get_session_factory()() as session:
@@ -105,11 +124,37 @@ async def get_due_deliveries() -> list[NotificationDelivery]:
             .where(NotificationDelivery.status == "PENDING")
             .where(NotificationDelivery.scheduled_for_utc <= now)
         )
-        return list((await session.scalars(stmt)).all())
+        rows = list((await session.scalars(stmt)).all())
+
+        # Convert to plain dataclasses INSIDE the session while objects are still attached.
+        result = []
+        for d in rows:
+            gs = d.guild_settings
+            c = d.contest
+            result.append(
+                DeliveryInfo(
+                    id=d.id,
+                    notification_type=d.notification_type,
+                    scheduled_for_utc=d.scheduled_for_utc,
+                    guild_id=gs.discord_guild_id,
+                    channel_id=gs.contest_alert_channel_id,
+                    alert_role_id=gs.alert_role_id,
+                    contest_id=c.id,
+                    contest_name=c.name,
+                    contest_url=c.url,
+                    contest_platform=c.platform,
+                    contest_start_utc=c.start_time_utc,
+                    contest_duration_seconds=c.duration_seconds,
+                )
+            )
+        return result
 
 
-async def get_pending_deliveries_for_guild(guild_id: str) -> list[NotificationDelivery]:
-    """Get all pending notification deliveries for a specific guild, ordered by schedule time."""
+async def get_pending_deliveries_for_guild(guild_id: str) -> list[dict]:
+    """Get all pending notification deliveries for a specific guild, ordered by schedule time.
+
+    Returns plain dicts so they're safe to use after the session closes.
+    """
     async with get_session_factory()() as session:
         stmt = (
             select(NotificationDelivery)
@@ -119,7 +164,23 @@ async def get_pending_deliveries_for_guild(guild_id: str) -> list[NotificationDe
             .where(NotificationDelivery.status == "PENDING")
             .order_by(NotificationDelivery.scheduled_for_utc.asc())
         )
-        return list((await session.scalars(stmt)).all())
+        rows = list((await session.scalars(stmt)).all())
+
+        result = []
+        for d in rows:
+            c = d.contest
+            result.append(
+                {
+                    "id": d.id,
+                    "notification_type": d.notification_type,
+                    "scheduled_for_utc": d.scheduled_for_utc,
+                    "contest_id": c.id,
+                    "contest_name": c.name,
+                    "contest_platform": c.platform,
+                    "contest_start_utc": c.start_time_utc,
+                }
+            )
+        return result
 
 
 async def mark_delivery_status(

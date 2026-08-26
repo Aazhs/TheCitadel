@@ -1,17 +1,37 @@
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import discord
 import pytest
 
 from src.cogs.reminders import Reminders
-from src.db.models import Contest, GuildSettings, NotificationDelivery
+from src.db.models import GuildSettings
+from src.services.reminders import DeliveryInfo
+
+
+def _make_delivery_info(**kwargs) -> DeliveryInfo:
+    """Build a DeliveryInfo with sensible defaults for tests."""
+    defaults = dict(
+        id=1,
+        notification_type="10m",
+        scheduled_for_utc=datetime.now(UTC),
+        guild_id="123",
+        channel_id="456",
+        alert_role_id="789",
+        contest_id=1,
+        contest_name="C1",
+        contest_url="https://codeforces.com/contest/1",
+        contest_platform="codeforces",
+        contest_start_utc=datetime.now(UTC) + timedelta(minutes=10),
+        contest_duration_seconds=7200,
+    )
+    defaults.update(kwargs)
+    return DeliveryInfo(**defaults)
 
 
 @pytest.fixture
 def cog():
     bot = MagicMock()
-    # Mock bot methods
     bot.get_guild = MagicMock()
     return Reminders(bot)
 
@@ -57,7 +77,8 @@ async def test_status_command_configured(mock_guild_service, cog, interaction):
     embed = kwargs["embed"]
     assert embed.title == "Contest Reminders Status"
     assert embed.fields[0].name == "Enabled"
-    assert embed.fields[0].value == "Yes"
+    # Updated: the cog now shows "✅ Yes" / "❌ No"
+    assert "Yes" in embed.fields[0].value
 
 
 @pytest.mark.asyncio
@@ -87,13 +108,17 @@ async def test_list_reminders_empty(mock_reminder_service, cog, interaction):
 @pytest.mark.asyncio
 @patch("src.cogs.reminders.reminder_service")
 async def test_list_reminders_with_deliveries(mock_reminder_service, cog, interaction):
-    delivery = NotificationDelivery(
-        id=1,
-        notification_type="24h",
-        scheduled_for_utc=datetime.now(UTC),
-        contest_id=1,
-        contest=Contest(name="C1", platform="codeforces", start_time_utc=datetime.now(UTC)),
-    )
+    now = datetime.now(UTC)
+    # The cog now receives plain dicts from the service
+    delivery = {
+        "id": 1,
+        "notification_type": "24h",
+        "scheduled_for_utc": now,
+        "contest_id": 1,
+        "contest_name": "C1",
+        "contest_platform": "codeforces",
+        "contest_start_utc": now + timedelta(hours=24),
+    }
     mock_reminder_service.get_pending_deliveries_for_guild = AsyncMock(return_value=[delivery])
 
     await cog.list_reminders.callback(cog, interaction)
@@ -104,7 +129,8 @@ async def test_list_reminders_with_deliveries(mock_reminder_service, cog, intera
     assert embed.title == "Upcoming Contest Reminders"
     assert len(embed.fields) == 1
     assert embed.fields[0].name == "C1"
-    assert "24h" in embed.fields[0].value
+    # Should show human-friendly label "24 hours"
+    assert "24 hours" in embed.fields[0].value
 
 
 @pytest.mark.asyncio
@@ -123,12 +149,9 @@ async def test_deliver_reminders_loop_no_deliveries(mock_reminder_service, cog):
 @pytest.mark.asyncio
 @patch("src.cogs.reminders.reminder_service")
 async def test_deliver_reminders_loop_missing_channel_id(mock_reminder_service, cog):
+    """When channel_id is None, mark delivery as FAILED."""
     mock_reminder_service.schedule_missing_deliveries = AsyncMock()
-    delivery = NotificationDelivery(
-        id=1,
-        guild_settings=GuildSettings(discord_guild_id="123", contest_alert_channel_id=None),
-        contest=Contest(name="C1", start_time_utc=datetime.now(UTC)),
-    )
+    delivery = _make_delivery_info(channel_id=None)
     mock_reminder_service.get_due_deliveries = AsyncMock(return_value=[delivery])
     mock_reminder_service.mark_delivery_status = AsyncMock()
 
@@ -142,20 +165,18 @@ async def test_deliver_reminders_loop_missing_channel_id(mock_reminder_service, 
 @pytest.mark.asyncio
 @patch("src.cogs.reminders.reminder_service")
 async def test_deliver_reminders_loop_success(mock_reminder_service, cog):
+    """When all conditions met, send the embed and mark SENT."""
     mock_reminder_service.schedule_missing_deliveries = AsyncMock()
-    delivery = NotificationDelivery(
+    delivery = _make_delivery_info(
         id=1,
         notification_type="10m",
-        guild_settings=GuildSettings(
-            discord_guild_id="123", contest_alert_channel_id="456", alert_role_id="789"
-        ),
-        contest=Contest(
-            name="C1",
-            platform="codeforces",
-            start_time_utc=datetime.now(UTC),
-            url="http",
-            duration_seconds=7200,
-        ),
+        guild_id="123",
+        channel_id="456",
+        alert_role_id="789",
+        contest_name="C1",
+        contest_platform="codeforces",
+        contest_url="https://codeforces.com/contest/1",
+        contest_duration_seconds=7200,
     )
     mock_reminder_service.get_due_deliveries = AsyncMock(return_value=[delivery])
     mock_reminder_service.mark_delivery_status = AsyncMock()
@@ -172,10 +193,10 @@ async def test_deliver_reminders_loop_success(mock_reminder_service, cog):
     mock_channel.send.assert_called_once()
     args, kwargs = mock_channel.send.call_args
     assert kwargs["content"] == "<@&789>"
-    assert kwargs["embed"].title == "C1"
+    assert "C1" in kwargs["embed"].title
 
     mock_reminder_service.mark_delivery_status.assert_called_once()
-    args, kwargs = mock_reminder_service.mark_delivery_status.call_args
-    assert args[0] == 1
-    assert args[1] == "SENT"
-    assert kwargs["message_id"] == "999"
+    call_args, call_kwargs = mock_reminder_service.mark_delivery_status.call_args
+    assert call_args[0] == 1
+    assert call_args[1] == "SENT"
+    assert call_kwargs["message_id"] == "999"

@@ -205,8 +205,9 @@ class TestStartCommand:
 
         embed = call_kwargs["embed"]
         assert "Citadel" in embed.title
-        # Should have 3 fields: profiles, alerts, upcoming
-        assert len(embed.fields) == 3
-        # Each field should mention "coming soon"
+        # The /start embed has 4 fields: Link Profiles, Compete, Leaderboard, Stay Updated
+        assert len(embed.fields) == 4
+        # All fields should have non-empty names and values
         for field in embed.fields:
-            assert "coming soon" in field.value.lower()
+            assert field.name
+            assert field.value

@@ -126,16 +126,48 @@ class Contests(commands.Cog):
 
     async def cog_load(self) -> None:
         """Start background tasks when cog is loaded."""
+        import asyncio
         if not self._sync_task_started:
             self.sync_contests_loop.start()
             self.auto_event_creator.start()
             self._sync_task_started = True
+        # Run an immediate sync on startup so the DB is fresh right away
+        asyncio.ensure_future(self._do_initial_sync())
 
     async def cog_unload(self) -> None:
         """Cancel background tasks when cog is unloaded."""
         self.sync_contests_loop.cancel()
         self.auto_event_creator.cancel()
         self._sync_task_started = False
+
+    async def _do_initial_sync(self) -> None:
+        """Run a single contest sync immediately on startup so the DB isn't stale."""
+        import asyncio
+        from src.providers import codechef as cc_provider
+        from src.providers import leetcode as lc_provider
+
+        await self.bot.wait_until_ready()
+        # Small delay to let everything settle
+        await asyncio.sleep(5)
+
+        logger.info("Running initial contest sync on startup...")
+        providers = [
+            ("Codeforces", cf_provider.fetch_contests, contest_service.sync_codeforces_contests),
+            ("CodeChef", cc_provider.fetch_contests, contest_service.sync_codechef_contests),
+            ("LeetCode", lc_provider.fetch_contests, contest_service.sync_leetcode_contests),
+        ]
+
+        for name, fetcher, syncer in providers:
+            try:
+                contests = await fetcher()
+                if contests:
+                    added, updated = await syncer(contests)
+                    logger.info("Initial %s sync: %d added, %d updated", name, added, updated)
+                else:
+                    logger.warning("Initial %s sync fetched no contests.", name)
+            except Exception as e:
+                logger.exception("Error during initial %s sync: %s", name, e)
+            await asyncio.sleep(1)
 
 
     @app_commands.command(
@@ -161,9 +193,11 @@ class Contests(commands.Cog):
         from src.services import contests as contest_service
         from src.services import events as event_service
         from src.cogs.events import _build_event_embed, RegisterButtonView
-        
+
         logger.info(f"Running auto_event_creator check (force={force})...")
         factory = get_session_factory()
+
+        # Fetch guild settings in a dedicated session that is closed before the loop.
         async with factory() as session:
             if specific_guild_id:
                 stmt = select(GuildSettings).where(GuildSettings.discord_guild_id == specific_guild_id)
@@ -171,77 +205,80 @@ class Contests(commands.Cog):
                 stmt = select(GuildSettings).where(GuildSettings.auto_create_events == True)
             result = await session.execute(stmt)
             guilds = result.scalars().all()
-            
+
         for gs in guilds:
             if not force:
                 try:
                     tz = ZoneInfo(gs.timezone)
                 except Exception:
                     tz = ZoneInfo("UTC")
-                    
+
                 now_local = datetime.datetime.now(tz)
-                
+
                 # Check if it's Saturday (weekday == 5) and hour == 22
                 if now_local.weekday() != 5 or now_local.hour != 22:
                     continue
-                    
+
                 # Prevent duplicate runs in the same week
                 if gs.last_auto_event_run:
-                    # If last run was less than 2 days ago, skip
                     delta = datetime.datetime.now(datetime.timezone.utc) - gs.last_auto_event_run
                     if delta.total_seconds() < 86400 * 2:
                         continue
-                    
+
             guild = self.bot.get_guild(int(gs.discord_guild_id))
             if not guild:
                 continue
-                
+
             logger.info(f"Auto-creating events for guild {guild.name}")
-            
-            # Fetch CodeChef and LeetCode upcoming contests
+
+            # Fetch upcoming contests from all platforms
             upcoming = await contest_service.get_upcoming_contests(limit=20)
-            target_contests = [c for c in upcoming if c.platform in ('codechef', 'leetcode')][:10]
-            
+            target_contests = [c for c in upcoming if c.platform in ('codechef', 'leetcode', 'codeforces')][:10]
+
             if not target_contests:
                 continue
-                
+
             announcements_ch = None
             if gs.announcement_channel_id:
                 announcements_ch = guild.get_channel(int(gs.announcement_channel_id))
-            
+
             if not announcements_ch:
                 announcements_ch = discord.utils.get(guild.text_channels, name="announcements")
-                
+
             if not announcements_ch:
-                # Anomaly: missing channel
                 try:
-                    await guild.owner.send(f"⚠️ **The Citadel Auto-Event Maker Error**\nI tried to create your weekly events, but I couldn't find an `#announcements` channel! Please create one or set it via `/setup announcement-channel`.")
+                    await guild.owner.send(
+                        f"⚠️ **The Citadel Auto-Event Maker Error**\n"
+                        f"I tried to create your weekly events, but I couldn't find an `#announcements` channel! "
+                        f"Please create one or set it via `/setup announcement-channel`."
+                    )
                 except Exception:
                     pass
                 continue
-                
+
             discussions_ch = discord.utils.get(guild.text_channels, name="discussions")
             results_ch = discord.utils.get(guild.text_channels, name="results")
-            
+
             for contest in target_contests:
                 try:
                     if contest.duration_seconds:
                         end_time = contest.start_time_utc + datetime.timedelta(seconds=contest.duration_seconds)
                     else:
                         end_time = contest.start_time_utc + datetime.timedelta(hours=2)
-                        
-                    # Check for duplicates
+
+                    # Check for duplicates — use a fresh session each time
                     from src.db.models import Event
-                    stmt = select(Event).where(
-                        Event.guild_settings_id == gs.id,
-                        Event.title == contest.name,
-                        Event.start_time_utc == contest.start_time_utc
-                    )
-                    existing = await session.execute(stmt)
-                    if existing.scalars().first():
-                        logger.info(f"Skipping duplicate event for {contest.name}")
-                        continue
-                        
+                    async with factory() as dup_session:
+                        stmt = select(Event).where(
+                            Event.guild_settings_id == gs.id,
+                            Event.title == contest.name,
+                            Event.start_time_utc == contest.start_time_utc
+                        )
+                        existing = await dup_session.execute(stmt)
+                        if existing.scalars().first():
+                            logger.info(f"Skipping duplicate event for {contest.name}")
+                            continue
+
                     event = await event_service.create_event(
                         guild_id=str(guild.id),
                         title=contest.name,
@@ -256,19 +293,20 @@ class Contests(commands.Cog):
                         discussion_channel_id=str(discussions_ch.id) if discussions_ch else None,
                         results_channel_id=str(results_ch.id) if results_ch else None,
                     )
-                    
+
                     event = await event_service.publish_event(event.id, str(guild.id))
-                    
+
                     embed = _build_event_embed(event, registration_count=0)
                     view = RegisterButtonView(event.id)
-                    
+
                     content = f"<@&{gs.alert_role_id}>" if gs.alert_role_id else ""
                     msg = await announcements_ch.send(content=content, embed=embed, view=view)
                     await event_service.update_announcement_message_id(event.id, str(msg.id))
-                    
+                    logger.info(f"Auto-created event '{contest.name}' for guild {guild.name}")
+
                 except Exception as e:
                     logger.error(f"Failed to auto-create event for {contest.name}: {e}")
-                    
+
             if not force:
                 from src.services import guild_settings as gs_service
                 await gs_service.update_last_auto_event_run(str(guild.id), datetime.datetime.now(datetime.timezone.utc))

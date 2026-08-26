@@ -117,7 +117,6 @@ async def sync_codechef_contests(cc_contests: list) -> tuple[int, int]:
                 "start_time_utc": c.start_time_utc,
                 "duration_seconds": c.duration_minutes * 60,
                 "phase": phase,
-                "updated_at": now,
             })
             
     if not relevant_contests:
@@ -168,7 +167,6 @@ async def sync_leetcode_contests(lc_contests: list) -> tuple[int, int]:
                 "start_time_utc": start_dt,
                 "duration_seconds": c.duration_seconds,
                 "phase": phase,
-                "updated_at": now,
             })
             
     if not relevant_contests:
