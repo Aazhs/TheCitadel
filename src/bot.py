@@ -7,6 +7,8 @@ import logging
 import discord
 from discord.ext import commands
 
+from src.config import get_settings
+
 logger = logging.getLogger("arena.bot")
 
 COG_EXTENSIONS: list[str] = [
@@ -28,9 +30,17 @@ COG_EXTENSIONS: list[str] = [
 
 def create_bot() -> commands.Bot:
     """Build a configured Bot instance with required intents."""
+    settings = get_settings()
+
     intents = discord.Intents.default()
-    intents.message_content = False  # not needed for slash commands
     intents.members = True  # required for on_member_join
+
+    # Enable message content intent only when accountability cog needs DM text
+    if settings.accountability_enabled:
+        intents.message_content = True
+        logger.info("Message Content Intent enabled (accountability cog)")
+    else:
+        intents.message_content = False  # not needed for slash commands
 
     bot = commands.Bot(
         command_prefix=commands.when_mentioned,  # slash-command only
@@ -61,3 +71,31 @@ async def load_extensions(bot: commands.Bot) -> None:
         except Exception:
             logger.exception("Failed to load extension: %s", ext)
             raise
+
+    # Conditionally load the accountability cog — never crash the bot on failure
+    settings = get_settings()
+    if settings.accountability_enabled:
+        if settings.accountability_user_id and settings.accountability_guild_id:
+            try:
+                await bot.load_extension("src.cogs.accountability")
+                logger.info(
+                    "Loaded accountability cog (user: %s, guild: %s)",
+                    settings.accountability_user_id,
+                    settings.accountability_guild_id,
+                )
+            except Exception:
+                logger.warning("Accountability cog failed to load — skipping", exc_info=True)
+        else:
+            missing = []
+            if not settings.accountability_user_id:
+                missing.append("ACCOUNTABILITY_USER_ID")
+            if not settings.accountability_guild_id:
+                missing.append("ACCOUNTABILITY_GUILD_ID")
+            logger.warning(
+                "ACCOUNTABILITY_ENABLED=true but missing %s — skipping",
+                ", ".join(missing),
+            )
+    else:
+        logger.info("Accountability cog disabled (ACCOUNTABILITY_ENABLED=false)")
+
+

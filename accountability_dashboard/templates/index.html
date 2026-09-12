@@ -1,0 +1,143 @@
+{% extends "base.html" %}
+
+{% block content %}
+<!-- Active Session -->
+<section class="card" id="active-session">
+    <h2>🎯 Active Session</h2>
+    {% if active_session %}
+    <div class="session-info">
+        <div class="session-task">{{ active_session.task_title }}</div>
+        <div class="session-meta">
+            <span>Started: {{ active_session.start_time }}</span>
+            <span>Elapsed: <strong id="elapsed">{{ active_session.elapsed_min }} min</strong></span>
+            {% if active_session.remaining_min is not none %}
+            <span>Remaining: <strong id="remaining" class="{% if active_session.remaining_min == 0 %}overdue{% endif %}">
+                {{ active_session.remaining_min }} min
+            </strong></span>
+            {% endif %}
+            {% if active_session.target_end %}
+            <span>Target: {{ active_session.target_end }}</span>
+            {% endif %}
+        </div>
+        <form method="post" action="/session/cancel" class="inline-form">
+            <button type="submit" class="btn btn-danger">Cancel Session</button>
+        </form>
+    </div>
+    {% else %}
+    <p class="muted">No active session. Waiting for a <code>!start</code> command in Discord.</p>
+    {% endif %}
+</section>
+
+<!-- Task Queue -->
+<section class="card">
+    <h2>📋 Task Queue</h2>
+    {% if tasks %}
+    <table>
+        <thead>
+            <tr>
+                <th>#</th>
+                <th>Task</th>
+                <th>Priority</th>
+                <th>Status</th>
+                <th>Risk</th>
+                <th>Actions</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for task in tasks %}
+            <tr>
+                <td>{{ task.id }}</td>
+                <td>
+                    <details>
+                        <summary>{{ task.title }}</summary>
+                        <form method="post" action="/task/edit/{{ task.id }}" class="edit-form">
+                            <label>Title: <input type="text" name="title" value="{{ task.title }}"></label>
+                            <label>Priority:
+                                <select name="priority">
+                                    <option value="low" {% if task.priority == 'low' %}selected{% endif %}>Low</option>
+                                    <option value="medium" {% if task.priority == 'medium' %}selected{% endif %}>Medium</option>
+                                    <option value="high" {% if task.priority == 'high' %}selected{% endif %}>High</option>
+                                </select>
+                            </label>
+                            <label>Scheduled: <input type="datetime-local" name="scheduled_time" value="{{ task.scheduled_time or '' }}"></label>
+                            <button type="submit" class="btn btn-small">Save</button>
+                        </form>
+                    </details>
+                </td>
+                <td><span class="badge badge-{{ task.priority }}">{{ task.priority }}</span></td>
+                <td>{{ task.status }}</td>
+                <td>{{ task.risk_score }}</td>
+                <td>
+                    <form method="post" action="/task/complete/{{ task.id }}" class="inline-form">
+                        <button type="submit" class="btn btn-small btn-success">✓ Done</button>
+                    </form>
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <p class="muted">No tasks in queue.</p>
+    {% endif %}
+</section>
+
+<!-- Activity Log -->
+<section class="card">
+    <h2>📜 Activity Log</h2>
+    {% if activity_log %}
+    <table class="log-table">
+        <thead>
+            <tr>
+                <th>Time</th>
+                <th>Type</th>
+                <th>User</th>
+                <th>AI</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for log in activity_log %}
+            <tr class="log-{{ log.log_type }}">
+                <td class="nowrap">{{ log.timestamp }}</td>
+                <td><span class="badge badge-log">{{ log.log_type }}</span></td>
+                <td>{{ log.user_update or '—' }}</td>
+                <td>{{ log.ai_feedback or '—' }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <p class="muted">No activity logged yet.</p>
+    {% endif %}
+</section>
+{% endblock %}
+
+{% block scripts %}
+<script>
+// Poll active session every 30 seconds
+setInterval(async () => {
+    try {
+        const resp = await fetch('/api/active-session');
+        const data = await resp.json();
+        const el = document.getElementById('active-session');
+        if (!el) return;
+
+        if (data.active) {
+            const elapsed = Math.floor(data.elapsed_seconds / 60);
+            const elapsedEl = document.getElementById('elapsed');
+            if (elapsedEl) elapsedEl.textContent = elapsed + ' min';
+
+            if (data.remaining_seconds !== null) {
+                const remaining = Math.floor(data.remaining_seconds / 60);
+                const remainingEl = document.getElementById('remaining');
+                if (remainingEl) {
+                    remainingEl.textContent = remaining + ' min';
+                    remainingEl.className = remaining <= 0 ? 'overdue' : '';
+                }
+            }
+        }
+    } catch (e) {
+        // Silently ignore polling errors
+    }
+}, 30000);
+</script>
+{% endblock %}

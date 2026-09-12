@@ -32,6 +32,7 @@ A Discord competitive-programming bot.
 - Supabase PostgreSQL with SQLAlchemy async ORM
 - Alembic database migrations
 - Docker support
+- **Accountability System** — DM-only personal accountability cog with local Ollama LLM. See [docs/accountability-setup.md](docs/accountability-setup.md).
 
 ## Prerequisites
 
