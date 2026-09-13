@@ -3,7 +3,8 @@ FROM python:3.12-slim AS base
 WORKDIR /app
 
 # Copy project files needed for installation
-COPY pyproject.toml docs/README.md ./
+COPY pyproject.toml ./
+COPY docs/README.md docs/
 COPY src/ src/
 
 # Install dependencies and the project itself
