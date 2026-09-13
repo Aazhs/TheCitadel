@@ -142,6 +142,7 @@ async def _call_gemini(
     system_prompt: str,
     user_message: str,
     temperature: float = 0.1,
+    response_mime_type: str | None = None,
 ) -> str:
     """Call the Gemini REST API and return the text response.
 
@@ -157,6 +158,9 @@ async def _call_gemini(
             "maxOutputTokens": 512,
         },
     }
+
+    if response_mime_type:
+        payload["generationConfig"]["responseMimeType"] = response_mime_type
 
     async with httpx.AsyncClient(timeout=30.0) as client:
         response = await client.post(
@@ -249,6 +253,7 @@ async def parse_user_intent(
             system_prompt=INTENT_SYSTEM_PROMPT,
             user_message=user_message,
             temperature=0.1,
+            response_mime_type="application/json",
         )
         parsed = _parse_json_response(raw)
 
@@ -270,6 +275,7 @@ async def parse_user_intent(
             system_prompt=INTENT_SYSTEM_PROMPT,
             user_message=f"{user_message}\n\n{RETRY_PROMPT}\nPrevious attempt: {raw}",
             temperature=0.0,
+            response_mime_type="application/json",
         )
         parsed_retry = _parse_json_response(raw_retry)
 
