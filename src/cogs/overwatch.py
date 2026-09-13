@@ -1,4 +1,4 @@
-"""Accountability cog — private-channel personal accountability system.
+"""Overwatch cog — private-channel personal overwatch system.
 
 Runs a 15-minute check-in loop that pings the configured user in a
 private guild channel, demands progress updates, and escalates tone on
@@ -18,63 +18,63 @@ from src.config import get_settings
 from src.db.engine import get_session_factory
 from src.db.models import AccTask, LogType
 from src.providers import gemini_client
-from src.services import accountability as acc_service
+from src.services import overwatch as acc_service
 
-logger = logging.getLogger("arena.cogs.accountability")
+logger = logging.getLogger("arena.cogs.overwatch")
 
-CHANNEL_NAME = "accountability-zone"
+CHANNEL_NAME = "overwatch-zone"
 
 
-class Accountability(commands.Cog):
-    """Private-channel accountability cog for a single user.
+class Overwatch(commands.Cog):
+    """Private-channel overwatch cog for a single user.
 
     On load, creates (or finds) a private text channel visible only to
     the target user and the bot. All check-ins, commands, and escalation
     happen in that channel.
 
-    Loaded conditionally based on ACCOUNTABILITY_ENABLED. Uses Gemini API
+    Loaded conditionally based on OVERWATCH_ENABLED. Uses Gemini API
     and the main Postgres database.
     """
 
     def __init__(self, bot: commands.Bot) -> None:
         self.bot = bot
         self.settings = get_settings()
-        self.user_id = int(self.settings.accountability_user_id)  # type: ignore[arg-type]
-        self.guild_id = int(self.settings.accountability_guild_id)  # type: ignore[arg-type]
+        self.user_id = int(self.settings.overwatch_user_id)  # type: ignore[arg-type]
+        self.guild_id = int(self.settings.overwatch_guild_id)  # type: ignore[arg-type]
         self._channel: discord.TextChannel | None = None
 
     async def cog_load(self) -> None:
         """Start the check-in loop."""
         if not self.settings.gemini_api_key:
-            raise RuntimeError("GEMINI_API_KEY is required for the accountability cog")
+            raise RuntimeError("GEMINI_API_KEY is required for the overwatch cog")
 
         self.checkin_loop.start()
-        logger.info("Accountability cog loaded — loop started for user %s", self.user_id)
+        logger.info("Overwatch cog loaded — loop started for user %s", self.user_id)
 
     async def cog_unload(self) -> None:
         """Cancel the loop."""
         self.checkin_loop.cancel()
-        logger.info("Accountability cog unloaded")
+        logger.info("Overwatch cog unloaded")
 
     # ------------------------------------------------------------------
     # Channel management
     # ------------------------------------------------------------------
 
     async def _ensure_channel(self) -> discord.TextChannel | None:
-        """Find or create the private accountability channel."""
+        """Find or create the private overwatch channel."""
         if self._channel is not None:
             return self._channel
 
         guild = self.bot.get_guild(self.guild_id)
         if guild is None:
-            logger.error("Accountability guild %s not found", self.guild_id)
+            logger.error("Overwatch guild %s not found", self.guild_id)
             return None
 
         # Look for existing channel by name
         for ch in guild.text_channels:
             if ch.name == CHANNEL_NAME:
                 self._channel = ch
-                logger.info("Found existing accountability channel: #%s", ch.name)
+                logger.info("Found existing overwatch channel: #%s", ch.name)
                 return self._channel
 
         # Create it with permission overwrites
@@ -105,24 +105,24 @@ class Accountability(commands.Cog):
             self._channel = await guild.create_text_channel(
                 name=CHANNEL_NAME,
                 overwrites=overwrites,
-                topic="🔒 Private accountability zone — bot check-ins and task tracking",
-                reason="Accountability cog: private channel for check-ins",
+                topic="🔒 Private overwatch zone — bot check-ins and task tracking",
+                reason="Overwatch cog: private channel for check-ins",
             )
-            logger.info("Created private accountability channel: #%s", self._channel.name)
+            logger.info("Created private overwatch channel: #%s", self._channel.name)
             return self._channel
         except discord.Forbidden:
             logger.error("Missing permissions to create channel in guild %s", self.guild_id)
             return None
         except Exception:
-            logger.exception("Failed to create accountability channel")
+            logger.exception("Failed to create overwatch channel")
             return None
 
     # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
 
-    def _is_accountability_msg(self, message: discord.Message) -> bool:
-        """Check if a message is from the target user in the accountability channel."""
+    def _is_overwatch_msg(self, message: discord.Message) -> bool:
+        """Check if a message is from the target user in the overwatch channel."""
         return (
             self._channel is not None
             and message.channel.id == self._channel.id
@@ -131,14 +131,14 @@ class Accountability(commands.Cog):
         )
 
     async def _send(self, text: str) -> discord.Message | None:
-        """Send a message to the accountability channel."""
+        """Send a message to the overwatch channel."""
         channel = await self._ensure_channel()
         if channel is None:
             return None
         try:
             return await channel.send(text)
         except discord.Forbidden:
-            logger.error("Cannot send to accountability channel — missing permissions")
+            logger.error("Cannot send to overwatch channel — missing permissions")
             return None
 
     async def _ping(self, text: str) -> discord.Message | None:
@@ -170,7 +170,7 @@ class Accountability(commands.Cog):
 
     @tasks.loop(minutes=15)
     async def checkin_loop(self) -> None:
-        """Core accountability loop — runs every 15 minutes."""
+        """Core overwatch loop — runs every 15 minutes."""
         try:
             if acc_service.is_quiet_hours(
                 self.settings.quiet_hours_start,
@@ -181,7 +181,7 @@ class Accountability(commands.Cog):
 
             channel = await self._ensure_channel()
             if channel is None:
-                logger.warning("No accountability channel — skipping check-in")
+                logger.warning("No overwatch channel — skipping check-in")
                 return
 
             async with get_session_factory()() as session:
@@ -249,7 +249,7 @@ class Accountability(commands.Cog):
 
                 # Wait for a reply in the channel (14-minute window)
                 def check(m: discord.Message) -> bool:
-                    return self._is_accountability_msg(m) and not m.content.startswith("!")
+                    return self._is_overwatch_msg(m) and not m.content.startswith("!")
 
                 try:
                     reply = await self.bot.wait_for("message", check=check, timeout=840)
@@ -349,7 +349,7 @@ class Accountability(commands.Cog):
                     )
 
         except Exception as e:
-            logger.exception("Error in accountability check-in loop: %s", e)
+            logger.exception("Error in overwatch check-in loop: %s", e)
 
     @checkin_loop.before_loop
     async def before_checkin_loop(self) -> None:
@@ -362,8 +362,8 @@ class Accountability(commands.Cog):
 
     @commands.Cog.listener("on_message")
     async def on_message(self, message: discord.Message) -> None:
-        """Route !commands from the accountability channel."""
-        if not self._is_accountability_msg(message):
+        """Route !commands from the overwatch channel."""
+        if not self._is_overwatch_msg(message):
             return
 
         if not message.content.startswith("!"):
@@ -551,4 +551,4 @@ class Accountability(commands.Cog):
 
 async def setup(bot: commands.Bot) -> None:
     """Add the cog to the bot."""
-    await bot.add_cog(Accountability(bot))
+    await bot.add_cog(Overwatch(bot))

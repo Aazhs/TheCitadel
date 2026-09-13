@@ -35,10 +35,10 @@ def create_bot() -> commands.Bot:
     intents = discord.Intents.default()
     intents.members = True  # required for on_member_join
 
-    # Enable message content intent only when accountability cog needs DM text
-    if settings.accountability_enabled:
+    # Enable message content intent when Overwatch cog needs channel text
+    if settings.overwatch_enabled:
         intents.message_content = True
-        logger.info("Message Content Intent enabled (accountability cog)")
+        logger.info("Message Content Intent enabled (Overwatch cog)")
     else:
         intents.message_content = False  # not needed for slash commands
 
@@ -72,32 +72,33 @@ async def load_extensions(bot: commands.Bot) -> None:
             logger.exception("Failed to load extension: %s", ext)
             raise
 
-    # Conditionally load the accountability cog — never crash the bot on failure
+    # Conditionally load the Overwatch cog — never crash the bot on failure
     settings = get_settings()
-    if settings.accountability_enabled:
+    if settings.overwatch_enabled:
         required = {
-            "ACCOUNTABILITY_USER_ID": settings.accountability_user_id,
-            "ACCOUNTABILITY_GUILD_ID": settings.accountability_guild_id,
+            "OVERWATCH_USER_ID": settings.overwatch_user_id,
+            "OVERWATCH_GUILD_ID": settings.overwatch_guild_id,
             "GEMINI_API_KEY": settings.gemini_api_key,
         }
         missing = [k for k, v in required.items() if not v]
 
         if not missing:
             try:
-                await bot.load_extension("src.cogs.accountability")
+                await bot.load_extension("src.cogs.overwatch")
                 logger.info(
-                    "Loaded accountability cog (user: %s, guild: %s)",
-                    settings.accountability_user_id,
-                    settings.accountability_guild_id,
+                    "Loaded Overwatch cog (user: %s, guild: %s)",
+                    settings.overwatch_user_id,
+                    settings.overwatch_guild_id,
                 )
             except Exception:
-                logger.warning("Accountability cog failed to load — skipping", exc_info=True)
+                logger.warning("Overwatch cog failed to load — skipping", exc_info=True)
         else:
             logger.warning(
-                "ACCOUNTABILITY_ENABLED=true but missing %s — skipping",
+                "OVERWATCH_ENABLED=true but missing %s — skipping",
                 ", ".join(missing),
             )
     else:
-        logger.info("Accountability cog disabled (ACCOUNTABILITY_ENABLED=false)")
+        logger.info("Overwatch cog disabled (OVERWATCH_ENABLED=false)")
+
 
 

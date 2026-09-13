@@ -1,4 +1,4 @@
-"""Accountability dashboard — FastAPI web UI for the accountability system.
+"""Overwatch dashboard — FastAPI web UI for the overwatch system.
 
 Reads from the same Postgres database as the bot. Shows task queue,
 active sessions, and activity log. Deployed alongside the bot on Render.
@@ -15,8 +15,9 @@ from fastapi import FastAPI, Form, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from sqlalchemy import select
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 # ---------------------------------------------------------------------------
 # Database setup (connects to the same Postgres as the bot)
@@ -61,7 +62,7 @@ async def lifespan(app: FastAPI):
         await _engine.dispose()
 
 
-app = FastAPI(title="Accountability Dashboard", lifespan=lifespan)
+app = FastAPI(title="Overwatch Dashboard", lifespan=lifespan)
 
 # Static files and templates
 BASE_DIR = Path(__file__).resolve().parent
@@ -75,8 +76,6 @@ templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 
 # We import the model classes inline to avoid pulling in the full bot config.
 # The table names are stable since they're managed by Alembic.
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text, func
-from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
 class DashBase(DeclarativeBase):

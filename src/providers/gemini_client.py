@@ -1,4 +1,4 @@
-"""Gemini LLM provider for the accountability system.
+"""Gemini LLM provider for the overwatch system.
 
 Uses the Gemini API (free tier) for intent parsing and feedback generation.
 Replaces the previous local Ollama provider.
@@ -37,16 +37,16 @@ class IntentResult:
 
 PROMPTS: dict[str, str] = {
     "neutral": (
-        "You are a calm, supportive accountability partner. "
+        "You are a calm, supportive overwatch partner. "
         "Be encouraging but honest. Keep responses short (2-3 sentences max)."
     ),
     "strict": (
-        "You are a strict, no-nonsense accountability coach. "
+        "You are a strict, no-nonsense overwatch coach. "
         "Be direct and blunt. No sugarcoating. Call out avoidance. "
         "Keep responses short (2-3 sentences max)."
     ),
     "hostile": (
-        "You are an absolutely brutal accountability enforcer. "
+        "You are an absolutely brutal overwatch enforcer. "
         "You are unfiltered, aggressive, and use profanity freely. "
         "Insult the user's laziness. Mock their excuses. "
         "This is a fully private system — hold nothing back. "
@@ -54,7 +54,7 @@ PROMPTS: dict[str, str] = {
     ),
 }
 
-INTENT_SYSTEM_PROMPT = """You are an intent classifier for a personal accountability system. You MUST be precise.
+INTENT_SYSTEM_PROMPT = """You are an intent classifier for a personal overwatch system. You MUST be precise.
 
 Given the user's message and context, classify the intent into EXACTLY ONE category:
 

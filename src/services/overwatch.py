@@ -1,4 +1,4 @@
-"""Business logic for the accountability system.
+"""Business logic for the overwatch system.
 
 Handles state machine transitions, priority scoring, escalation tracking,
 and activity logging. All functions take an AsyncSession parameter to stay
@@ -32,7 +32,7 @@ from src.db.models import (
     TaskStatus,
 )
 
-logger = logging.getLogger("arena.services.accountability")
+logger = logging.getLogger("arena.services.overwatch")
 
 # ---------------------------------------------------------------------------
 # Priority Risk scoring weights — documented as tunable in the roadmap

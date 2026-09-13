@@ -440,7 +440,7 @@ class EventLeaderboardEntry(Base):
 
 
 class AuditLog(Base):
-    """Tracks moderator actions for accountability."""
+    """Tracks moderator actions for overwatch."""
 
     __tablename__ = "audit_logs"
 
@@ -493,13 +493,13 @@ class RoleMapping(Base):
 
 
 # ---------------------------------------------------------------------------
-# Accountability system models
+# Overwatch system models
 # ---------------------------------------------------------------------------
 
 
 
 class TaskPriority(enum.StrEnum):
-    """Priority level for an accountability task."""
+    """Priority level for an overwatch task."""
 
     LOW = "low"
     MEDIUM = "medium"
@@ -507,7 +507,7 @@ class TaskPriority(enum.StrEnum):
 
 
 class TaskStatus(enum.StrEnum):
-    """Lifecycle status of an accountability task."""
+    """Lifecycle status of an overwatch task."""
 
     PENDING = "pending"
     IN_PROGRESS = "in_progress"
@@ -515,7 +515,7 @@ class TaskStatus(enum.StrEnum):
 
 
 class LogType(enum.StrEnum):
-    """Category of an accountability activity log entry."""
+    """Category of an overwatch activity log entry."""
 
     CHECK_IN = "check_in"
     ESCALATION = "escalation"
@@ -527,7 +527,7 @@ class LogType(enum.StrEnum):
 
 
 class AccTask(Base):
-    """A unit of work tracked by the accountability system."""
+    """A unit of work tracked by the overwatch system."""
 
     __tablename__ = "acc_tasks"
 
@@ -555,7 +555,7 @@ class AccTask(Base):
 
 
 class AccSession(Base):
-    """Tracks active work sessions for accountability tasks."""
+    """Tracks active work sessions for overwatch tasks."""
 
     __tablename__ = "acc_sessions"
 
@@ -587,7 +587,7 @@ class AccUserContext(Base):
 
 
 class AccActivityLog(Base):
-    """Append-only audit trail for all accountability system events."""
+    """Append-only audit trail for all overwatch system events."""
 
     __tablename__ = "acc_activity_log"
 

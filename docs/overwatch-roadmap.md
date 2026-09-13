@@ -1,6 +1,6 @@
-# Accountability System — Roadmap & Open Decisions
+# Overwatch System — Roadmap & Open Decisions
 
-This document tracks open design decisions, known limitations, and planned enhancements for the accountability cog. Items listed here are intentional tradeoffs made for the v0.2 prototype — not bugs.
+This document tracks open design decisions, known limitations, and planned enhancements for the overwatch cog. Items listed here are intentional tradeoffs made for the v0.2 prototype — not bugs.
 
 ---
 
@@ -21,7 +21,7 @@ This document tracks open design decisions, known limitations, and planned enhan
 
 ### 2. Priority Risk Scoring Formula
 
-**Current implementation** (in `services/accountability.py`):
+**Current implementation** (in `services/overwatch.py`):
 ```
 score = priority_weight + (overdue_hours × 0.5)
 ```
@@ -53,7 +53,7 @@ The `UserContext.known_blockers` field is currently a plain `Text` column. Consi
 
 ### 5. No Auth on the Local Dashboard
 
-The FastAPI dashboard at `accountability_dashboard/` has no authentication. It's designed for a trusted home network only.
+The FastAPI dashboard at `overwatch_dashboard/` has no authentication. It's designed for a trusted home network only.
 
 **Future options:**
 - Simple bearer token auth
@@ -76,7 +76,7 @@ The local SQLite database uses `create_all()` on startup instead of Alembic migr
 
 ### 8. No Test Coverage for New Modules
 
-The new `cogs/accountability.py`, `services/accountability.py`, and `providers/ollama_client.py` have no unit tests yet. The existing repo's test conventions (`tests/`, `conftest.py` fixtures, pytest-asyncio) should be followed once this feature stabilises.
+The new `cogs/overwatch.py`, `services/overwatch.py`, and `providers/ollama_client.py` have no unit tests yet. The existing repo's test conventions (`tests/`, `conftest.py` fixtures, pytest-asyncio) should be followed once this feature stabilises.
 
 **Priority test targets:**
 - `priority_risk_score()` — pure function, easy to test
@@ -87,7 +87,7 @@ The new `cogs/accountability.py`, `services/accountability.py`, and `providers/o
 
 ### 9. No Seed/Demo Data
 
-The local SQLite database starts empty. Consider adding a `scripts/seed_accountability.py` script that populates a few sample tasks for initial testing.
+The local SQLite database starts empty. Consider adding a `scripts/seed_overwatch.py` script that populates a few sample tasks for initial testing.
 
 ---
 

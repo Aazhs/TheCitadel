@@ -29,10 +29,10 @@ class Settings(BaseSettings):
     event_check_interval_seconds: int = 60
     submission_deadline_hours: int = 24
 
-    # Accountability system (Render-deployed, uses Gemini API + main Postgres DB)
-    accountability_enabled: bool = False
-    accountability_user_id: str | None = None
-    accountability_guild_id: str | None = None
+    # Overwatch system (Render-deployed, uses Gemini API + main Postgres DB)
+    overwatch_enabled: bool = False
+    overwatch_user_id: str | None = None
+    overwatch_guild_id: str | None = None
     gemini_api_key: str | None = None
     gemini_model: str = "gemini-2.0-flash"
     quiet_hours_start: str = "01:00"
