@@ -161,7 +161,7 @@ async def _call_gemini(
     async with httpx.AsyncClient(timeout=30.0) as client:
         response = await client.post(
             url,
-            params={"key": api_key},
+            headers={"X-goog-api-key": api_key},
             json=payload,
         )
         response.raise_for_status()
@@ -222,7 +222,7 @@ async def parse_user_intent(
     user_context: dict | None = None,
     *,
     api_key: str,
-    model: str = "gemini-2.0-flash",
+    model: str = "gemini-3.6-flash",
 ) -> IntentResult:
     """Parse user intent from a message using Gemini.
 
@@ -301,7 +301,7 @@ async def generate_feedback(
     tone: str = "strict",
     *,
     api_key: str,
-    model: str = "gemini-2.0-flash",
+    model: str = "gemini-3.6-flash",
 ) -> str:
     """Generate a feedback message for the user in the specified tone.
 

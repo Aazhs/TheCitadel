@@ -34,7 +34,7 @@ class Settings(BaseSettings):
     overwatch_user_id: str | None = None
     overwatch_guild_id: str | None = None
     gemini_api_key: str | None = None
-    gemini_model: str = "gemini-2.0-flash"
+    gemini_model: str = "gemini-3.6-flash"
     quiet_hours_start: str = "01:00"
     quiet_hours_end: str = "07:30"
 
