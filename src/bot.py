@@ -55,9 +55,16 @@ def create_bot() -> commands.Bot:
         logger.info("Logged in as %s (ID: %s)", bot.user, bot.user.id)
         logger.info("Connected to %d guild(s)", len(bot.guilds))
 
-        # Sync application commands globally
+        # Sync application commands globally + to each guild for instant availability
         synced = await bot.tree.sync()
-        logger.info("Synced %d slash command(s)", len(synced))
+        logger.info("Synced %d slash command(s) globally", len(synced))
+
+        for guild in bot.guilds:
+            try:
+                guild_synced = await bot.tree.sync(guild=guild)
+                logger.info("Synced %d command(s) to guild %s", len(guild_synced), guild.id)
+            except Exception:
+                logger.warning("Failed to sync commands to guild %s", guild.id, exc_info=True)
 
     return bot
 
