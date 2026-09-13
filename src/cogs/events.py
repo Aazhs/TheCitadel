@@ -513,7 +513,7 @@ class Events(commands.Cog):
             "active": "🟢",
         }
 
-        for event in events:
+        for event in events[:25]:
             emoji = status_emoji.get(event.status, "❓")
             start_info = "Not scheduled"
             if event.start_time_utc:
@@ -528,6 +528,9 @@ class Events(commands.Cog):
                 ),
                 inline=False,
             )
+
+        if len(events) > 25:
+            embed.set_footer(text=f"Showing 25 of {len(events)} events (Discord limit)")
 
         await interaction.followup.send(embed=embed, ephemeral=True)
 
