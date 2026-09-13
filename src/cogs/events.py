@@ -514,14 +514,17 @@ class Events(commands.Cog):
         }
 
         for event in events:
-            start_ts = int(event.start_time_utc.timestamp())
             emoji = status_emoji.get(event.status, "❓")
+            start_info = "Not scheduled"
+            if event.start_time_utc:
+                start_ts = int(event.start_time_utc.timestamp())
+                start_info = f"<t:{start_ts}:R>"
             embed.add_field(
                 name=f"{emoji} {event.title} (ID: {event.id})",
                 value=(
                     f"**Type:** {event.event_type.replace('_', ' ').title()}\n"
                     f"**Status:** {event.status.title()}\n"
-                    f"**Starts:** <t:{start_ts}:R>"
+                    f"**Starts:** {start_info}"
                 ),
                 inline=False,
             )

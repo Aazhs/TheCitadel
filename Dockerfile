@@ -12,7 +12,6 @@ RUN pip install --no-cache-dir .
 # Copy remaining files
 COPY alembic.ini .
 COPY migrations/ migrations/
-COPY overwatch_dashboard/ overwatch_dashboard/
 
 ENV PYTHONUNBUFFERED=1
 ENV PYTHONDONTWRITEBYTECODE=1

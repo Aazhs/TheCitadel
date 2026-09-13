@@ -1,9 +1,11 @@
-"""Overwatch cog — private-channel personal overwatch system.
+"""Overwatch cog — private-channel personal productivity enforcer.
 
 Runs a 15-minute check-in loop that pings the configured user in a
 private guild channel, demands progress updates, and escalates tone on
 missed check-ins. Uses Gemini API for intent parsing and the main
 Postgres database. Deployed alongside the rest of Citadel on Render.
+
+All commands use Discord slash commands (/ow-*).
 """
 
 from __future__ import annotations
@@ -12,13 +14,15 @@ import logging
 from datetime import datetime
 
 import discord
+from discord import app_commands
 from discord.ext import commands, tasks
+from sqlalchemy import select
 
 from src.config import get_settings
 from src.db.engine import get_session_factory
 from src.db.models import AccTask, LogType
 from src.providers import gemini_client
-from src.services import overwatch as acc_service
+from src.services import overwatch as ow_service
 
 logger = logging.getLogger("arena.cogs.overwatch")
 
@@ -29,11 +33,8 @@ class Overwatch(commands.Cog):
     """Private-channel overwatch cog for a single user.
 
     On load, creates (or finds) a private text channel visible only to
-    the target user and the bot. All check-ins, commands, and escalation
-    happen in that channel.
-
-    Loaded conditionally based on OVERWATCH_ENABLED. Uses Gemini API
-    and the main Postgres database.
+    the target user and the bot. Check-ins and escalation happen in that
+    channel. Task management uses slash commands usable anywhere.
     """
 
     def __init__(self, bot: commands.Bot) -> None:
@@ -46,7 +47,7 @@ class Overwatch(commands.Cog):
     async def cog_load(self) -> None:
         """Start the check-in loop."""
         if not self.settings.gemini_api_key:
-            raise RuntimeError("GEMINI_API_KEY is required for the overwatch cog")
+            raise RuntimeError("GEMINI_API_KEY is required for the Overwatch cog")
 
         self.checkin_loop.start()
         logger.info("Overwatch cog loaded — loop started for user %s", self.user_id)
@@ -70,14 +71,12 @@ class Overwatch(commands.Cog):
             logger.error("Overwatch guild %s not found", self.guild_id)
             return None
 
-        # Look for existing channel by name
         for ch in guild.text_channels:
             if ch.name == CHANNEL_NAME:
                 self._channel = ch
                 logger.info("Found existing overwatch channel: #%s", ch.name)
                 return self._channel
 
-        # Create it with permission overwrites
         target_member = guild.get_member(self.user_id)
         if target_member is None:
             try:
@@ -172,7 +171,7 @@ class Overwatch(commands.Cog):
     async def checkin_loop(self) -> None:
         """Core overwatch loop — runs every 15 minutes."""
         try:
-            if acc_service.is_quiet_hours(
+            if ow_service.is_quiet_hours(
                 self.settings.quiet_hours_start,
                 self.settings.quiet_hours_end,
             ):
@@ -185,14 +184,12 @@ class Overwatch(commands.Cog):
                 return
 
             async with get_session_factory()() as session:
-                user_context = await acc_service.get_or_create_context(session)
-                active_session = await acc_service.get_active_session(session)
-                state = acc_service.determine_loop_state(active_session)
+                user_context = await ow_service.get_or_create_context(session)
+                active_session = await ow_service.get_active_session(session)
+                state = ow_service.determine_loop_state(active_session)
 
                 task = None
                 if active_session:
-                    from sqlalchemy import select
-
                     task = await session.scalar(
                         select(AccTask).where(AccTask.id == active_session.task_id)
                     )
@@ -222,26 +219,26 @@ class Overwatch(commands.Cog):
                     msg = f"🚨 **OVERDUE** — **{task_name}** passed its target time.\n{feedback}"
 
                 else:  # idle
-                    queue = await acc_service.get_task_queue(session)
+                    queue = await ow_service.get_task_queue(session)
                     if queue:
                         top_task = queue[0]
-                        score = acc_service.priority_risk_score(top_task)
+                        score = ow_service.priority_risk_score(top_task)
                         msg = (
                             f"📋 **What's next?** — Top priority: **{top_task.title}** "
                             f"(risk score: {score:.1f})\n"
-                            f"Reply with what you're working on, or `!start {top_task.title} 30`"
+                            f"Use `/ow-start` to begin a session."
                         )
                     else:
                         msg = (
                             "📋 **No tasks in queue.** What are you working on?\n"
-                            "Use `!start <task> <minutes>` to begin a session."
+                            "Use `/ow-start` to begin a session."
                         )
 
                 sent = await self._ping(msg)
                 if sent is None:
                     return
 
-                await acc_service.log_activity(
+                await ow_service.log_activity(
                     session,
                     LogType.CHECK_IN,
                     ai_feedback=msg,
@@ -249,12 +246,12 @@ class Overwatch(commands.Cog):
 
                 # Wait for a reply in the channel (14-minute window)
                 def check(m: discord.Message) -> bool:
-                    return self._is_overwatch_msg(m) and not m.content.startswith("!")
+                    return self._is_overwatch_msg(m) and not m.content.startswith("/")
 
                 try:
                     reply = await self.bot.wait_for("message", check=check, timeout=840)
                 except TimeoutError:
-                    missed = await acc_service.increment_missed_checkins(session)
+                    missed = await ow_service.increment_missed_checkins(session)
                     esc_tone = gemini_client.escalation_tone(missed)
                     nag = await gemini_client.generate_feedback(
                         intent="DISTRACTED",
@@ -264,7 +261,7 @@ class Overwatch(commands.Cog):
                         model=model,
                     )
                     await self._ping(f"⚠️ **Missed check-in #{missed}**\n{nag}")
-                    await acc_service.log_activity(
+                    await ow_service.log_activity(
                         session,
                         LogType.ESCALATION,
                         ai_feedback=nag,
@@ -272,7 +269,7 @@ class Overwatch(commands.Cog):
                     return
 
                 # Got a reply — parse intent
-                await acc_service.reset_missed_checkins(session)
+                await ow_service.reset_missed_checkins(session)
 
                 intent_result = await gemini_client.parse_user_intent(
                     reply.content,
@@ -282,13 +279,12 @@ class Overwatch(commands.Cog):
                     model=model,
                 )
 
-                # Handle parse error
                 if intent_result.intent == "UNCLEAR" and not intent_result.summary:
                     await self._send(
                         "❓ I couldn't parse that. Could you rephrase? "
                         "What are you working on right now?"
                     )
-                    await acc_service.log_activity(
+                    await ow_service.log_activity(
                         session,
                         LogType.PARSE_ERROR,
                         user_update=reply.content,
@@ -296,7 +292,6 @@ class Overwatch(commands.Cog):
                     )
                     return
 
-                # Generate feedback based on intent
                 context_str = f"Task: {task.title if task else 'none'}, User said: {reply.content}"
                 feedback = await gemini_client.generate_feedback(
                     intent=intent_result.intent,
@@ -306,46 +301,37 @@ class Overwatch(commands.Cog):
                     model=model,
                 )
 
-                # Act on intent
                 if intent_result.intent == "COMPLETED" and active_session:
-                    completed_task = await acc_service.complete_session(session)
+                    completed_task = await ow_service.complete_session(session)
                     task_name = completed_task.title if completed_task else "your task"
                     await self._send(f"✅ **{task_name}** marked done.\n{feedback}")
-                    await acc_service.log_activity(
-                        session,
-                        LogType.SESSION_END,
-                        user_update=reply.content,
-                        ai_feedback=feedback,
+                    await ow_service.log_activity(
+                        session, LogType.SESSION_END,
+                        user_update=reply.content, ai_feedback=feedback,
                     )
 
                 elif intent_result.intent == "DISTRACTED":
                     await self._send(f"🔴 **Off track.**\n{feedback}")
-                    await acc_service.log_activity(
-                        session,
-                        LogType.DISTRACTION,
-                        user_update=reply.content,
-                        ai_feedback=feedback,
+                    await ow_service.log_activity(
+                        session, LogType.DISTRACTION,
+                        user_update=reply.content, ai_feedback=feedback,
                     )
 
                 elif intent_result.intent == "START_SESSION":
                     title = intent_result.task_title or "unnamed task"
                     mins = intent_result.minutes or 30
-                    await acc_service.start_session(session, title, mins)
+                    await ow_service.start_session(session, title, mins)
                     await self._send(f"🚀 **Session started:** {title} ({mins} min)\n{feedback}")
-                    await acc_service.log_activity(
-                        session,
-                        LogType.SESSION_START,
-                        user_update=reply.content,
-                        ai_feedback=feedback,
+                    await ow_service.log_activity(
+                        session, LogType.SESSION_START,
+                        user_update=reply.content, ai_feedback=feedback,
                     )
 
                 else:
                     await self._send(feedback)
-                    await acc_service.log_activity(
-                        session,
-                        LogType.CHECK_IN,
-                        user_update=reply.content,
-                        ai_feedback=feedback,
+                    await ow_service.log_activity(
+                        session, LogType.CHECK_IN,
+                        user_update=reply.content, ai_feedback=feedback,
                     )
 
         except Exception as e:
@@ -357,89 +343,51 @@ class Overwatch(commands.Cog):
         await self.bot.wait_until_ready()
 
     # ------------------------------------------------------------------
-    # Command router (message-based in the private channel)
+    # Slash commands — /ow-*
     # ------------------------------------------------------------------
 
-    @commands.Cog.listener("on_message")
-    async def on_message(self, message: discord.Message) -> None:
-        """Route !commands from the overwatch channel."""
-        if not self._is_overwatch_msg(message):
-            return
-
-        if not message.content.startswith("!"):
-            return
-
-        parts = message.content.strip().split(maxsplit=2)
-        command = parts[0].lower()
-
-        try:
-            if command == "!start":
-                await self._cmd_start(message, parts)
-            elif command == "!status":
-                await self._cmd_status(message)
-            elif command == "!pause":
-                await self._cmd_pause(message)
-            elif command == "!resume":
-                await self._cmd_resume(message)
-            elif command == "!done":
-                await self._cmd_done(message)
-            elif command == "!queue":
-                await self._cmd_queue(message)
-            elif command == "!skip":
-                await self._cmd_skip(message, parts)
-            else:
-                await message.reply(
-                    "Unknown command. Available: `!start`, `!status`, `!pause`, "
-                    "`!resume`, `!done`, `!queue`, `!skip`"
-                )
-        except Exception as e:
-            logger.exception("Error handling command %s: %s", command, e)
-            await message.reply(f"⚠️ Error: {e}")
-
-    # ------------------------------------------------------------------
-    # Command implementations
-    # ------------------------------------------------------------------
-
-    async def _cmd_start(self, message: discord.Message, parts: list[str]) -> None:
-        """Handle !start <task> <minutes>."""
-        if len(parts) < 2:
-            await message.reply("Usage: `!start <task name> <minutes>`\nExample: `!start auth module 45`")
-            return
-
-        remaining = message.content[len("!start"):].strip()
-        tokens = remaining.rsplit(maxsplit=1)
-
-        if len(tokens) == 2 and tokens[1].isdigit():
-            task_title = tokens[0]
-            minutes = int(tokens[1])
-        else:
-            task_title = remaining
-            minutes = 30
+    @app_commands.command(name="ow-start", description="Start a timed work session on a task")
+    @app_commands.describe(task="What you're working on", minutes="How many minutes (default: 30)")
+    async def ow_start(
+        self,
+        interaction: discord.Interaction,
+        task: str,
+        minutes: int = 30,
+    ) -> None:
+        await interaction.response.defer(ephemeral=True)
 
         async with get_session_factory()() as session:
-            await acc_service.start_session(session, task_title, minutes)
-            await acc_service.log_activity(
-                session,
-                LogType.COMMAND,
-                user_update=message.content,
-                ai_feedback=f"Started session: {task_title} ({minutes} min)",
+            await ow_service.start_session(session, task, minutes)
+            await ow_service.log_activity(
+                session, LogType.COMMAND,
+                user_update=f"/ow-start {task} {minutes}",
+                ai_feedback=f"Started session: {task} ({minutes} min)",
             )
 
-        await message.reply(
-            f"🚀 **Session started:** {task_title}\n"
+        await interaction.followup.send(
+            f"🚀 **Session started:** {task}\n"
             f"⏱️ Target: {minutes} minutes\n"
-            f"I'll check in on you periodically."
+            f"I'll check in on you in `#overwatch-zone`.",
+            ephemeral=True,
         )
 
-    async def _cmd_status(self, message: discord.Message) -> None:
-        """Handle !status."""
+        # Also notify in the overwatch channel
+        await self._send(
+            f"🚀 **Session started:** {task} ({minutes} min)\n"
+            f"Check-ins will fire every 15 minutes."
+        )
+
+    @app_commands.command(name="ow-status", description="Check your current session and stats")
+    async def ow_status(self, interaction: discord.Interaction) -> None:
+        await interaction.response.defer(ephemeral=True)
+
         async with get_session_factory()() as session:
-            active = await acc_service.get_active_session(session)
-            ctx = await acc_service.get_or_create_context(session)
+            active = await ow_service.get_active_session(session)
+            ctx = await ow_service.get_or_create_context(session)
+
+            embed = discord.Embed(title="📊 Overwatch Status", color=discord.Color.dark_gold())
 
             if active:
-                from sqlalchemy import select
-
                 task = await session.scalar(select(AccTask).where(AccTask.id == active.task_id))
                 task_name = task.title if task else "unknown"
 
@@ -450,103 +398,231 @@ class Overwatch(commands.Cog):
 
                 elapsed = int((datetime.now() - active.start_time.replace(tzinfo=None)).total_seconds() / 60)
 
-                await message.reply(
-                    f"📊 **Active Session**\n"
-                    f"• Task: **{task_name}**\n"
-                    f"• Elapsed: {elapsed} min\n"
-                    f"• Remaining: {remaining}\n"
-                    f"• Missed check-ins: {ctx.missed_checkins}"
-                )
+                embed.add_field(name="Task", value=f"**{task_name}**", inline=True)
+                embed.add_field(name="Elapsed", value=f"{elapsed} min", inline=True)
+                embed.add_field(name="Remaining", value=remaining, inline=True)
             else:
-                await message.reply(
-                    f"📊 **No active session**\n"
-                    f"• Missed check-ins: {ctx.missed_checkins}\n"
-                    f"Use `!start <task> <minutes>` to begin."
-                )
+                embed.description = "No active session. Use `/ow-start` to begin."
 
-    async def _cmd_pause(self, message: discord.Message) -> None:
-        """Handle !pause."""
-        async with get_session_factory()() as session:
-            paused = await acc_service.pause_session(session)
-            if paused:
-                await acc_service.log_activity(
-                    session, LogType.COMMAND, user_update="!pause"
-                )
-                await message.reply("⏸️ Session paused.")
-            else:
-                await message.reply("No active session to pause.")
+            embed.add_field(name="Missed Check-ins", value=str(ctx.missed_checkins), inline=True)
 
-    async def _cmd_resume(self, message: discord.Message) -> None:
-        """Handle !resume."""
-        async with get_session_factory()() as session:
-            resumed = await acc_service.resume_session(session)
-            if resumed:
-                await acc_service.log_activity(
-                    session, LogType.COMMAND, user_update="!resume"
-                )
-                await message.reply("▶️ Session resumed.")
-            else:
-                await message.reply("No paused session to resume.")
+            if ctx.current_topic:
+                embed.add_field(name="Current Topic", value=ctx.current_topic, inline=True)
 
-    async def _cmd_done(self, message: discord.Message) -> None:
-        """Handle !done."""
+        await interaction.followup.send(embed=embed, ephemeral=True)
+
+    @app_commands.command(name="ow-done", description="Mark your current task as complete")
+    async def ow_done(self, interaction: discord.Interaction) -> None:
+        await interaction.response.defer(ephemeral=True)
+
         async with get_session_factory()() as session:
-            completed_task = await acc_service.complete_session(session)
+            completed_task = await ow_service.complete_session(session)
             if completed_task:
-                await acc_service.log_activity(
-                    session,
-                    LogType.SESSION_END,
-                    user_update="!done",
+                await ow_service.log_activity(
+                    session, LogType.SESSION_END,
+                    user_update="/ow-done",
                     ai_feedback=f"Completed: {completed_task.title}",
                 )
-                await message.reply(f"✅ **{completed_task.title}** marked done. Nice work.")
+                await interaction.followup.send(
+                    f"✅ **{completed_task.title}** marked done.", ephemeral=True
+                )
+                await self._send(f"✅ **{completed_task.title}** marked done.")
             else:
-                await message.reply("No active session to complete.")
-
-    async def _cmd_queue(self, message: discord.Message) -> None:
-        """Handle !queue."""
-        async with get_session_factory()() as session:
-            queue = await acc_service.get_task_queue(session)
-
-            if not queue:
-                await message.reply("📋 **Queue is empty.** Use `!start <task> <minutes>` to add work.")
-                return
-
-            lines = ["📋 **Task Queue** (by priority risk):"]
-            for i, task in enumerate(queue[:10], 1):
-                score = acc_service.priority_risk_score(task)
-                status_emoji = "🔵" if task.status == "pending" else "🟡"
-                lines.append(
-                    f"{i}. {status_emoji} **{task.title}** "
-                    f"[{task.priority}] — risk: {score:.1f}"
+                await interaction.followup.send(
+                    "No active session to complete.", ephemeral=True
                 )
 
-            await message.reply("\n".join(lines))
+    @app_commands.command(name="ow-pause", description="Pause the current session")
+    async def ow_pause(self, interaction: discord.Interaction) -> None:
+        await interaction.response.defer(ephemeral=True)
 
-    async def _cmd_skip(self, message: discord.Message, parts: list[str]) -> None:
-        """Handle !skip [task_id]."""
         async with get_session_factory()() as session:
-            if len(parts) >= 2 and parts[1].isdigit():
-                task_id = int(parts[1])
-                skipped = await acc_service.skip_task(session, task_id)
-                if skipped:
-                    await acc_service.log_activity(
-                        session, LogType.COMMAND, user_update=f"!skip {task_id}"
-                    )
-                    await message.reply(f"⏭️ Task #{task_id} skipped.")
-                else:
-                    await message.reply(f"Task #{task_id} not found.")
+            paused = await ow_service.pause_session(session)
+            if paused:
+                await ow_service.log_activity(session, LogType.COMMAND, user_update="/ow-pause")
+                await interaction.followup.send("⏸️ Session paused.", ephemeral=True)
+                await self._send("⏸️ Session paused.")
             else:
-                queue = await acc_service.get_task_queue(session)
+                await interaction.followup.send("No active session to pause.", ephemeral=True)
+
+    @app_commands.command(name="ow-resume", description="Resume the last paused session")
+    async def ow_resume(self, interaction: discord.Interaction) -> None:
+        await interaction.response.defer(ephemeral=True)
+
+        async with get_session_factory()() as session:
+            resumed = await ow_service.resume_session(session)
+            if resumed:
+                await ow_service.log_activity(session, LogType.COMMAND, user_update="/ow-resume")
+                await interaction.followup.send("▶️ Session resumed.", ephemeral=True)
+                await self._send("▶️ Session resumed.")
+            else:
+                await interaction.followup.send("No paused session to resume.", ephemeral=True)
+
+    @app_commands.command(name="ow-queue", description="View your task queue sorted by priority")
+    async def ow_queue(self, interaction: discord.Interaction) -> None:
+        await interaction.response.defer(ephemeral=True)
+
+        async with get_session_factory()() as session:
+            queue = await ow_service.get_task_queue(session)
+
+            if not queue:
+                await interaction.followup.send(
+                    "📋 **Queue is empty.** Use `/ow-start` to add work.",
+                    ephemeral=True,
+                )
+                return
+
+            embed = discord.Embed(
+                title="📋 Task Queue",
+                description="Sorted by priority risk score (highest first)",
+                color=discord.Color.dark_teal(),
+            )
+
+            for i, task in enumerate(queue[:10], 1):
+                score = ow_service.priority_risk_score(task)
+                status_emoji = "🔵" if task.status == "pending" else "🟡"
+                embed.add_field(
+                    name=f"{i}. {status_emoji} {task.title}",
+                    value=f"Priority: `{task.priority}` | Risk: `{score:.1f}` | ID: `{task.id}`",
+                    inline=False,
+                )
+
+        await interaction.followup.send(embed=embed, ephemeral=True)
+
+    @app_commands.command(name="ow-skip", description="Skip/remove the top task or a specific task")
+    @app_commands.describe(task_id="Task ID to skip (omit to skip top task)")
+    async def ow_skip(
+        self,
+        interaction: discord.Interaction,
+        task_id: int | None = None,
+    ) -> None:
+        await interaction.response.defer(ephemeral=True)
+
+        async with get_session_factory()() as session:
+            if task_id is not None:
+                skipped = await ow_service.skip_task(session, task_id)
+                if skipped:
+                    await ow_service.log_activity(
+                        session, LogType.COMMAND, user_update=f"/ow-skip {task_id}"
+                    )
+                    await interaction.followup.send(
+                        f"⏭️ Task #{task_id} skipped.", ephemeral=True
+                    )
+                else:
+                    await interaction.followup.send(
+                        f"Task #{task_id} not found.", ephemeral=True
+                    )
+            else:
+                queue = await ow_service.get_task_queue(session)
                 if queue:
                     top = queue[0]
-                    await acc_service.skip_task(session, top.id)
-                    await acc_service.log_activity(
-                        session, LogType.COMMAND, user_update=f"!skip (top: {top.title})"
+                    await ow_service.skip_task(session, top.id)
+                    await ow_service.log_activity(
+                        session, LogType.COMMAND,
+                        user_update=f"/ow-skip (top: {top.title})",
                     )
-                    await message.reply(f"⏭️ Skipped **{top.title}**.")
+                    await interaction.followup.send(
+                        f"⏭️ Skipped **{top.title}**.", ephemeral=True
+                    )
                 else:
-                    await message.reply("Queue is empty, nothing to skip.")
+                    await interaction.followup.send(
+                        "Queue is empty, nothing to skip.", ephemeral=True
+                    )
+
+    @app_commands.command(name="ow-log", description="View recent activity log")
+    @app_commands.describe(count="Number of entries to show (default: 10)")
+    async def ow_log(
+        self,
+        interaction: discord.Interaction,
+        count: int = 10,
+    ) -> None:
+        await interaction.response.defer(ephemeral=True)
+
+        from src.db.models import AccActivityLog
+
+        async with get_session_factory()() as session:
+            stmt = (
+                select(AccActivityLog)
+                .order_by(AccActivityLog.timestamp.desc())
+                .limit(min(count, 20))
+            )
+            logs = list((await session.scalars(stmt)).all())
+
+        if not logs:
+            await interaction.followup.send("📜 No activity yet.", ephemeral=True)
+            return
+
+        embed = discord.Embed(
+            title="📜 Overwatch Activity Log",
+            color=discord.Color.greyple(),
+        )
+
+        type_emoji = {
+            "check_in": "✅",
+            "escalation": "⚠️",
+            "command": "⌨️",
+            "session_start": "🚀",
+            "session_end": "🏁",
+            "distraction": "🔴",
+            "parse_error": "❓",
+        }
+
+        for log in logs:
+            emoji = type_emoji.get(log.log_type, "📝")
+            ts = log.timestamp.strftime("%m/%d %H:%M") if log.timestamp else "?"
+            value_parts = []
+            if log.user_update:
+                value_parts.append(f"**You:** {log.user_update[:80]}")
+            if log.ai_feedback:
+                value_parts.append(f"**Bot:** {log.ai_feedback[:80]}")
+
+            embed.add_field(
+                name=f"{emoji} {log.log_type.replace('_', ' ').title()} — {ts}",
+                value="\n".join(value_parts) if value_parts else "—",
+                inline=False,
+            )
+
+        await interaction.followup.send(embed=embed, ephemeral=True)
+
+    @app_commands.command(name="ow-add", description="Add a task to the queue without starting a session")
+    @app_commands.describe(
+        task="Task name",
+        priority="Priority level (low/medium/high)",
+    )
+    @app_commands.choices(priority=[
+        app_commands.Choice(name="Low", value="low"),
+        app_commands.Choice(name="Medium", value="medium"),
+        app_commands.Choice(name="High", value="high"),
+    ])
+    async def ow_add(
+        self,
+        interaction: discord.Interaction,
+        task: str,
+        priority: str = "medium",
+    ) -> None:
+        await interaction.response.defer(ephemeral=True)
+
+        from src.db.models import TaskStatus
+
+        async with get_session_factory()() as session:
+            new_task = AccTask(
+                title=task,
+                priority=priority,
+                status=TaskStatus.PENDING.value,
+            )
+            session.add(new_task)
+            await session.commit()
+            await session.refresh(new_task)
+
+            await ow_service.log_activity(
+                session, LogType.COMMAND,
+                user_update=f"/ow-add {task} [{priority}]",
+            )
+
+        await interaction.followup.send(
+            f"📌 Added **{task}** (priority: `{priority}`, ID: `{new_task.id}`).",
+            ephemeral=True,
+        )
 
 
 async def setup(bot: commands.Bot) -> None:
