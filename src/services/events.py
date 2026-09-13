@@ -179,7 +179,10 @@ async def list_events(guild_id: str, *, include_ended: bool = False) -> list[Eve
     async with factory() as session:
         stmt = select(Event).join(GuildSettings).where(GuildSettings.discord_guild_id == guild_id)
         if not include_ended:
-            stmt = stmt.where(Event.status.notin_(["ended", "cancelled"]))
+            stmt = stmt.where(
+                Event.status.notin_(["ended", "cancelled"]),
+                Event.end_time_utc > func.now(),
+            )
         stmt = stmt.order_by(Event.start_time_utc.asc())
         result = await session.execute(stmt)
         return list(result.scalars().all())
