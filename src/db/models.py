@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import enum
 from datetime import datetime
 
 from sqlalchemy import (
+    JSON,
     Boolean,
     DateTime,
     ForeignKey,
@@ -13,7 +15,6 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
-    JSON,
     func,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -116,7 +117,7 @@ class GuildMember(Base):
     )
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
     verified_competitor: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
-    
+
     # Leaderboard & Statistics
     arena_points_all_time: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
     arena_points_current_cycle: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
@@ -125,7 +126,7 @@ class GuildMember(Base):
     problems_solved_total: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
     current_streak: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
     longest_streak: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
-    
+
     # Star Ratings
     cp_star_rating: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
     dsa_star_rating: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
@@ -476,7 +477,7 @@ class RoleMapping(Base):
     min_value: Mapped[int | None] = mapped_column(Integer, nullable=True)
     role_id: Mapped[str] = mapped_column(String(20), nullable=False)
     role_name_cache: Mapped[str | None] = mapped_column(String(255), nullable=True)
-    
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
@@ -489,3 +490,112 @@ class RoleMapping(Base):
 
     def __repr__(self) -> str:
         return f"<RoleMapping(id={self.id}, category={self.category}, role_id={self.role_id})>"
+
+
+# ---------------------------------------------------------------------------
+# Accountability system models
+# ---------------------------------------------------------------------------
+
+
+
+class TaskPriority(enum.StrEnum):
+    """Priority level for an accountability task."""
+
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"
+
+
+class TaskStatus(enum.StrEnum):
+    """Lifecycle status of an accountability task."""
+
+    PENDING = "pending"
+    IN_PROGRESS = "in_progress"
+    DONE = "done"
+
+
+class LogType(enum.StrEnum):
+    """Category of an accountability activity log entry."""
+
+    CHECK_IN = "check_in"
+    ESCALATION = "escalation"
+    COMMAND = "command"
+    SESSION_START = "session_start"
+    SESSION_END = "session_end"
+    DISTRACTION = "distraction"
+    PARSE_ERROR = "parse_error"
+
+
+class AccTask(Base):
+    """A unit of work tracked by the accountability system."""
+
+    __tablename__ = "acc_tasks"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    title: Mapped[str] = mapped_column(String(255), nullable=False)
+    domain: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    priority: Mapped[str] = mapped_column(
+        String(10), default=TaskPriority.MEDIUM.value, nullable=False
+    )
+    status: Mapped[str] = mapped_column(
+        String(20), default=TaskStatus.PENDING.value, nullable=False
+    )
+    scheduled_time: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+
+    # Relationships
+    sessions: Mapped[list[AccSession]] = relationship(
+        "AccSession", back_populates="task", cascade="all, delete-orphan"
+    )
+
+
+class AccSession(Base):
+    """Tracks active work sessions for accountability tasks."""
+
+    __tablename__ = "acc_sessions"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    task_id: Mapped[int] = mapped_column(Integer, ForeignKey("acc_tasks.id"), nullable=False)
+    start_time: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    target_end_time: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+
+    # Relationships
+    task: Mapped[AccTask] = relationship("AccTask", back_populates="sessions")
+
+
+class AccUserContext(Base):
+    """Persistent context about the user for subject-aware check-ins.
+
+    Expected to hold exactly one row, upserted on each update.
+    """
+
+    __tablename__ = "acc_user_context"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    subject_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    current_topic: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    known_blockers: Mapped[str | None] = mapped_column(Text, nullable=True)
+    missed_checkins: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+
+
+class AccActivityLog(Base):
+    """Append-only audit trail for all accountability system events."""
+
+    __tablename__ = "acc_activity_log"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    timestamp: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    log_type: Mapped[str] = mapped_column(String(20), nullable=False)
+    user_update: Mapped[str | None] = mapped_column(Text, nullable=True)
+    ai_feedback: Mapped[str | None] = mapped_column(Text, nullable=True)
+

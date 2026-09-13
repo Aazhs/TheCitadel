@@ -2,9 +2,8 @@
 
 Runs a 15-minute check-in loop that pings the configured user in a
 private guild channel, demands progress updates, and escalates tone on
-missed check-ins. Uses a local Ollama LLM for intent parsing and a
-local SQLite database. Completely independent of the guild-facing
-competitive-programming features.
+missed check-ins. Uses Gemini API for intent parsing and the main
+Postgres database. Deployed alongside the rest of Citadel on Render.
 """
 
 from __future__ import annotations
@@ -16,9 +15,9 @@ import discord
 from discord.ext import commands, tasks
 
 from src.config import get_settings
-from src.db.local_engine import close_local_db, get_local_session_factory, init_local_db
-from src.db.local_models import LogType
-from src.providers import ollama_client
+from src.db.engine import get_session_factory
+from src.db.models import AccTask, LogType
+from src.providers import gemini_client
 from src.services import accountability as acc_service
 
 logger = logging.getLogger("arena.cogs.accountability")
@@ -31,11 +30,10 @@ class Accountability(commands.Cog):
 
     On load, creates (or finds) a private text channel visible only to
     the target user and the bot. All check-ins, commands, and escalation
-    happen in that channel — never in DMs.
+    happen in that channel.
 
-    Loaded conditionally based on ACCOUNTABILITY_ENABLED and Ollama
-    reachability. Does not interact with the /setup permission system
-    the rest of Citadel uses.
+    Loaded conditionally based on ACCOUNTABILITY_ENABLED. Uses Gemini API
+    and the main Postgres database.
     """
 
     def __init__(self, bot: commands.Bot) -> None:
@@ -46,24 +44,16 @@ class Accountability(commands.Cog):
         self._channel: discord.TextChannel | None = None
 
     async def cog_load(self) -> None:
-        """Initialise local DB and start the check-in loop."""
-        # Ollama reachability gate
-        reachable = await ollama_client.check_ollama_reachable(self.settings.ollama_host)
-        if not reachable:
-            logger.warning(
-                "Ollama not reachable at %s — accountability cog will not start",
-                self.settings.ollama_host,
-            )
-            raise RuntimeError(f"Ollama not reachable at {self.settings.ollama_host}")
+        """Start the check-in loop."""
+        if not self.settings.gemini_api_key:
+            raise RuntimeError("GEMINI_API_KEY is required for the accountability cog")
 
-        await init_local_db(self.settings.accountability_db_path)
         self.checkin_loop.start()
         logger.info("Accountability cog loaded — loop started for user %s", self.user_id)
 
     async def cog_unload(self) -> None:
-        """Cancel the loop and close the local DB."""
+        """Cancel the loop."""
         self.checkin_loop.cancel()
-        await close_local_db()
         logger.info("Accountability cog unloaded")
 
     # ------------------------------------------------------------------
@@ -71,11 +61,7 @@ class Accountability(commands.Cog):
     # ------------------------------------------------------------------
 
     async def _ensure_channel(self) -> discord.TextChannel | None:
-        """Find or create the private accountability channel.
-
-        The channel is locked down so only the target user and the bot
-        can see it. If it already exists (by name), reuse it.
-        """
+        """Find or create the private accountability channel."""
         if self._channel is not None:
             return self._channel
 
@@ -166,7 +152,7 @@ class Accountability(commands.Cog):
             if task:
                 ctx["task_title"] = task.title
             if active_session.target_end_time:
-                remaining = (active_session.target_end_time - datetime.now()).total_seconds() / 60
+                remaining = (active_session.target_end_time.replace(tzinfo=None) - datetime.now()).total_seconds() / 60
                 ctx["minutes_remaining"] = max(0, int(remaining))
         return ctx
 
@@ -186,7 +172,6 @@ class Accountability(commands.Cog):
     async def checkin_loop(self) -> None:
         """Core accountability loop — runs every 15 minutes."""
         try:
-            # Skip during quiet hours
             if acc_service.is_quiet_hours(
                 self.settings.quiet_hours_start,
                 self.settings.quiet_hours_end,
@@ -194,47 +179,45 @@ class Accountability(commands.Cog):
                 logger.debug("Quiet hours — skipping check-in")
                 return
 
-            # Ensure the channel exists before doing anything
             channel = await self._ensure_channel()
             if channel is None:
                 logger.warning("No accountability channel — skipping check-in")
                 return
 
-            async with get_local_session_factory()() as session:
+            async with get_session_factory()() as session:
                 user_context = await acc_service.get_or_create_context(session)
                 active_session = await acc_service.get_active_session(session)
                 state = acc_service.determine_loop_state(active_session)
 
-                # Load task if there's an active session
                 task = None
                 if active_session:
                     from sqlalchemy import select
 
-                    from src.db.local_models import Task
-
                     task = await session.scalar(
-                        select(Task).where(Task.id == active_session.task_id)
+                        select(AccTask).where(AccTask.id == active_session.task_id)
                     )
 
-                tone = ollama_client.escalation_tone(user_context.missed_checkins)
+                tone = gemini_client.escalation_tone(user_context.missed_checkins)
+                api_key = self.settings.gemini_api_key
+                model = self.settings.gemini_model
 
                 if state == "active":
                     task_name = task.title if task else "your current task"
                     msg = f"⏱️ **Check-in** — How's progress on **{task_name}**?"
                     if active_session.target_end_time:
                         remaining = (
-                            active_session.target_end_time - datetime.now()
+                            active_session.target_end_time.replace(tzinfo=None) - datetime.now()
                         ).total_seconds() / 60
                         msg += f" ({max(0, int(remaining))} min remaining)"
 
                 elif state == "overdue":
                     task_name = task.title if task else "your task"
-                    feedback = await ollama_client.generate_feedback(
+                    feedback = await gemini_client.generate_feedback(
                         intent="DISTRACTED",
                         context=f"Task '{task_name}' is OVERDUE. User has not responded.",
                         tone=tone,
-                        model=self.settings.ollama_model,
-                        host=self.settings.ollama_host,
+                        api_key=api_key,
+                        model=model,
                     )
                     msg = f"🚨 **OVERDUE** — **{task_name}** passed its target time.\n{feedback}"
 
@@ -271,15 +254,14 @@ class Accountability(commands.Cog):
                 try:
                     reply = await self.bot.wait_for("message", check=check, timeout=840)
                 except TimeoutError:
-                    # Missed check-in — escalate
                     missed = await acc_service.increment_missed_checkins(session)
-                    esc_tone = ollama_client.escalation_tone(missed)
-                    nag = await ollama_client.generate_feedback(
+                    esc_tone = gemini_client.escalation_tone(missed)
+                    nag = await gemini_client.generate_feedback(
                         intent="DISTRACTED",
                         context=f"User has ignored {missed} consecutive check-in(s).",
                         tone=esc_tone,
-                        model=self.settings.ollama_model,
-                        host=self.settings.ollama_host,
+                        api_key=api_key,
+                        model=model,
                     )
                     await self._ping(f"⚠️ **Missed check-in #{missed}**\n{nag}")
                     await acc_service.log_activity(
@@ -292,12 +274,12 @@ class Accountability(commands.Cog):
                 # Got a reply — parse intent
                 await acc_service.reset_missed_checkins(session)
 
-                intent_result = await ollama_client.parse_user_intent(
+                intent_result = await gemini_client.parse_user_intent(
                     reply.content,
                     session_context=self._session_context_dict(active_session, task),
                     user_context=self._user_context_dict(user_context),
-                    model=self.settings.ollama_model,
-                    host=self.settings.ollama_host,
+                    api_key=api_key,
+                    model=model,
                 )
 
                 # Handle parse error
@@ -316,12 +298,12 @@ class Accountability(commands.Cog):
 
                 # Generate feedback based on intent
                 context_str = f"Task: {task.title if task else 'none'}, User said: {reply.content}"
-                feedback = await ollama_client.generate_feedback(
+                feedback = await gemini_client.generate_feedback(
                     intent=intent_result.intent,
                     context=context_str,
                     tone=tone,
-                    model=self.settings.ollama_model,
-                    host=self.settings.ollama_host,
+                    api_key=api_key,
+                    model=model,
                 )
 
                 # Act on intent
@@ -358,7 +340,6 @@ class Accountability(commands.Cog):
                     )
 
                 else:
-                    # PROGRESS_UPDATE or UNCLEAR with summary
                     await self._send(feedback)
                     await acc_service.log_activity(
                         session,
@@ -425,7 +406,6 @@ class Accountability(commands.Cog):
             await message.reply("Usage: `!start <task name> <minutes>`\nExample: `!start auth module 45`")
             return
 
-        # Parse: last token is minutes if numeric, else default 30
         remaining = message.content[len("!start"):].strip()
         tokens = remaining.rsplit(maxsplit=1)
 
@@ -436,7 +416,7 @@ class Accountability(commands.Cog):
             task_title = remaining
             minutes = 30
 
-        async with get_local_session_factory()() as session:
+        async with get_session_factory()() as session:
             await acc_service.start_session(session, task_title, minutes)
             await acc_service.log_activity(
                 session,
@@ -453,24 +433,22 @@ class Accountability(commands.Cog):
 
     async def _cmd_status(self, message: discord.Message) -> None:
         """Handle !status."""
-        async with get_local_session_factory()() as session:
+        async with get_session_factory()() as session:
             active = await acc_service.get_active_session(session)
             ctx = await acc_service.get_or_create_context(session)
 
             if active:
                 from sqlalchemy import select
 
-                from src.db.local_models import Task
-
-                task = await session.scalar(select(Task).where(Task.id == active.task_id))
+                task = await session.scalar(select(AccTask).where(AccTask.id == active.task_id))
                 task_name = task.title if task else "unknown"
 
                 remaining = "N/A"
                 if active.target_end_time:
-                    delta = (active.target_end_time - datetime.now()).total_seconds() / 60
+                    delta = (active.target_end_time.replace(tzinfo=None) - datetime.now()).total_seconds() / 60
                     remaining = f"{max(0, int(delta))} min"
 
-                elapsed = int((datetime.now() - active.start_time).total_seconds() / 60)
+                elapsed = int((datetime.now() - active.start_time.replace(tzinfo=None)).total_seconds() / 60)
 
                 await message.reply(
                     f"📊 **Active Session**\n"
@@ -488,7 +466,7 @@ class Accountability(commands.Cog):
 
     async def _cmd_pause(self, message: discord.Message) -> None:
         """Handle !pause."""
-        async with get_local_session_factory()() as session:
+        async with get_session_factory()() as session:
             paused = await acc_service.pause_session(session)
             if paused:
                 await acc_service.log_activity(
@@ -500,7 +478,7 @@ class Accountability(commands.Cog):
 
     async def _cmd_resume(self, message: discord.Message) -> None:
         """Handle !resume."""
-        async with get_local_session_factory()() as session:
+        async with get_session_factory()() as session:
             resumed = await acc_service.resume_session(session)
             if resumed:
                 await acc_service.log_activity(
@@ -512,7 +490,7 @@ class Accountability(commands.Cog):
 
     async def _cmd_done(self, message: discord.Message) -> None:
         """Handle !done."""
-        async with get_local_session_factory()() as session:
+        async with get_session_factory()() as session:
             completed_task = await acc_service.complete_session(session)
             if completed_task:
                 await acc_service.log_activity(
@@ -527,7 +505,7 @@ class Accountability(commands.Cog):
 
     async def _cmd_queue(self, message: discord.Message) -> None:
         """Handle !queue."""
-        async with get_local_session_factory()() as session:
+        async with get_session_factory()() as session:
             queue = await acc_service.get_task_queue(session)
 
             if not queue:
@@ -547,7 +525,7 @@ class Accountability(commands.Cog):
 
     async def _cmd_skip(self, message: discord.Message, parts: list[str]) -> None:
         """Handle !skip [task_id]."""
-        async with get_local_session_factory()() as session:
+        async with get_session_factory()() as session:
             if len(parts) >= 2 and parts[1].isdigit():
                 task_id = int(parts[1])
                 skipped = await acc_service.skip_task(session, task_id)
@@ -559,7 +537,6 @@ class Accountability(commands.Cog):
                 else:
                     await message.reply(f"Task #{task_id} not found.")
             else:
-                # Skip the top task
                 queue = await acc_service.get_task_queue(session)
                 if queue:
                     top = queue[0]

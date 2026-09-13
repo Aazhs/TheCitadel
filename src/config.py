@@ -29,13 +29,12 @@ class Settings(BaseSettings):
     event_check_interval_seconds: int = 60
     submission_deadline_hours: int = 24
 
-    # Accountability system (local, channel-based — fully independent of Postgres/Supabase)
+    # Accountability system (Render-deployed, uses Gemini API + main Postgres DB)
     accountability_enabled: bool = False
     accountability_user_id: str | None = None
     accountability_guild_id: str | None = None
-    accountability_db_path: str = "./accountability.db"
-    ollama_model: str = "llama3.2:3b"
-    ollama_host: str = "http://localhost:11434"
+    gemini_api_key: str | None = None
+    gemini_model: str = "gemini-2.0-flash"
     quiet_hours_start: str = "01:00"
     quiet_hours_end: str = "07:30"
 

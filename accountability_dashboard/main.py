@@ -1,43 +1,50 @@
-"""FastAPI dashboard for the accountability system.
+"""Accountability dashboard — FastAPI web UI for the accountability system.
 
-Reads/writes the same local SQLite database that the accountability cog
-uses. Fully separate from the Next.js dashboard — own process, own port,
-no shared auth.
-
-Run with: uvicorn accountability_dashboard.main:app --host 0.0.0.0 --port 8000
+Reads from the same Postgres database as the bot. Shows task queue,
+active sessions, and activity log. Deployed alongside the bot on Render.
 """
 
 from __future__ import annotations
 
 import os
-import sys
-from contextlib import asynccontextmanager, suppress
+from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
-
-# Add the project root to sys.path so we can import src.db.local_models
-PROJECT_ROOT = str(Path(__file__).resolve().parent.parent)
-if PROJECT_ROOT not in sys.path:
-    sys.path.insert(0, PROJECT_ROOT)
 
 from fastapi import FastAPI, Form, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from sqlalchemy import select, update
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
-from src.db.local_models import (
-    ActiveSession,
-    ActivityLog,
-    Task,
-    TaskPriority,
-    TaskStatus,
-)
+# ---------------------------------------------------------------------------
+# Database setup (connects to the same Postgres as the bot)
+# ---------------------------------------------------------------------------
 
-# ---------------------------------------------------------------------------
-# Database setup (own engine, reads the same .db file as the cog)
-# ---------------------------------------------------------------------------
+DATABASE_URL = os.environ.get(
+    "DATABASE_URL",
+    "postgresql://postgres:password@localhost:5432/postgres",
+)
+_engine = None
+_session_factory = None
+
+
+def _init_db():
+    """Initialise the async Postgres engine for the dashboard."""
+    global _engine, _session_factory
+    url = DATABASE_URL
+    if url.startswith("postgresql://"):
+        url = url.replace("postgresql://", "postgresql+asyncpg://", 1)
+    _engine = create_async_engine(url, echo=False)
+    _session_factory = async_sessionmaker(_engine, expire_on_commit=False)
+
+
+def _get_session() -> AsyncSession:
+    """Get a new async session."""
+    if _session_factory is None:
+        _init_db()
+    return _session_factory()  # type: ignore[misc]
 
 
 # ---------------------------------------------------------------------------
@@ -63,23 +70,48 @@ templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 
 
 # ---------------------------------------------------------------------------
-# Helper: priority risk score (duplicated from service to avoid tight coupling)
+# Import models (same models as the bot)
 # ---------------------------------------------------------------------------
 
-_PRIORITY_WEIGHTS = {
-    TaskPriority.LOW.value: 1.0,
-    TaskPriority.MEDIUM.value: 3.0,
-    TaskPriority.HIGH.value: 5.0,
-}
+# We import the model classes inline to avoid pulling in the full bot config.
+# The table names are stable since they're managed by Alembic.
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text, func
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
-def _priority_risk_score(task: Task) -> float:
-    now = datetime.now()
-    weight = _PRIORITY_WEIGHTS.get(task.priority, 3.0)
-    overdue_hours = 0.0
-    if task.scheduled_time and task.scheduled_time < now:
-        overdue_hours = (now - task.scheduled_time).total_seconds() / 3600.0
-    return weight + (overdue_hours * 0.5)
+class DashBase(DeclarativeBase):
+    pass
+
+
+class DashAccTask(DashBase):
+    __tablename__ = "acc_tasks"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    title: Mapped[str] = mapped_column(String(255))
+    priority: Mapped[str] = mapped_column(String(10))
+    status: Mapped[str] = mapped_column(String(20))
+    scheduled_time: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class DashAccSession(DashBase):
+    __tablename__ = "acc_sessions"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    task_id: Mapped[int] = mapped_column(Integer, ForeignKey("acc_tasks.id"))
+    start_time: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    target_end_time: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    is_active: Mapped[bool] = mapped_column(Boolean)
+
+
+class DashAccActivityLog(DashBase):
+    __tablename__ = "acc_activity_log"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    log_type: Mapped[str] = mapped_column(String(20))
+    user_update: Mapped[str | None] = mapped_column(Text, nullable=True)
+    ai_feedback: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
 # ---------------------------------------------------------------------------
@@ -89,54 +121,58 @@ def _priority_risk_score(task: Task) -> float:
 
 @app.get("/", response_class=HTMLResponse)
 async def index(request: Request):
-    """Main dashboard page — task queue, active session, activity log."""
+    """Dashboard landing page — task queue, active session, activity log."""
     async with _get_session() as session:
-        # Task queue
-        stmt = select(Task).where(
-            Task.status.in_([TaskStatus.PENDING.value, TaskStatus.IN_PROGRESS.value])
+        # Active tasks
+        task_stmt = (
+            select(DashAccTask)
+            .where(DashAccTask.status.in_(["pending", "in_progress"]))
+            .order_by(DashAccTask.created_at.desc())
         )
-        tasks = list((await session.scalars(stmt)).all())
-        tasks.sort(key=_priority_risk_score, reverse=True)
-
-        # Compute scores for template
-        task_data = []
-        for t in tasks:
-            task_data.append({
+        tasks = list((await session.scalars(task_stmt)).all())
+        task_data = [
+            {
                 "id": t.id,
                 "title": t.title,
-                "domain": t.domain,
                 "priority": t.priority,
                 "status": t.status,
-                "scheduled_time": t.scheduled_time,
-                "risk_score": round(_priority_risk_score(t), 1),
-            })
+            }
+            for t in tasks
+        ]
 
         # Active session
-        active_stmt = select(ActiveSession).where(ActiveSession.is_active.is_(True)).limit(1)
-        active_session = await session.scalar(active_stmt)
+        session_stmt = (
+            select(DashAccSession)
+            .where(DashAccSession.is_active.is_(True))
+            .limit(1)
+        )
+        active = await session.scalar(session_stmt)
         session_data = None
-        if active_session:
-            task = await session.scalar(select(Task).where(Task.id == active_session.task_id))
-            elapsed = int((datetime.now() - active_session.start_time).total_seconds() / 60)
+        if active:
+            task = await session.scalar(
+                select(DashAccTask).where(DashAccTask.id == active.task_id)
+            )
+            elapsed = int(
+                (datetime.now() - active.start_time.replace(tzinfo=None)).total_seconds() / 60
+            )
             remaining = None
-            if active_session.target_end_time:
-                remaining = max(
-                    0, int((active_session.target_end_time - datetime.now()).total_seconds() / 60)
+            if active.target_end_time:
+                remaining = int(
+                    (active.target_end_time.replace(tzinfo=None) - datetime.now()).total_seconds() / 60
                 )
             session_data = {
-                "task_title": task.title if task else "Unknown",
-                "start_time": active_session.start_time.strftime("%H:%M"),
-                "elapsed_min": elapsed,
-                "remaining_min": remaining,
-                "target_end": (
-                    active_session.target_end_time.strftime("%H:%M")
-                    if active_session.target_end_time
-                    else None
-                ),
+                "task_title": task.title if task else "unknown",
+                "elapsed_minutes": elapsed,
+                "remaining_minutes": remaining,
+                "start_time": active.start_time.strftime("%H:%M"),
             }
 
-        # Activity log (last 25 entries)
-        log_stmt = select(ActivityLog).order_by(ActivityLog.timestamp.desc()).limit(25)
+        # Activity log (last 20)
+        log_stmt = (
+            select(DashAccActivityLog)
+            .order_by(DashAccActivityLog.timestamp.desc())
+            .limit(20)
+        )
         logs = list((await session.scalars(log_stmt)).all())
         log_data = [
             {
@@ -150,9 +186,9 @@ async def index(request: Request):
         ]
 
     return templates.TemplateResponse(
-        "index.html",
-        {
-            "request": request,
+        request=request,
+        name="index.html",
+        context={
             "tasks": task_data,
             "active_session": session_data,
             "activity_log": log_data,
@@ -165,67 +201,30 @@ async def index(request: Request):
 async def edit_task(
     task_id: int,
     title: str = Form(...),
-    priority: str = Form(...),
-    scheduled_time: str = Form(None),
+    priority: str = Form("medium"),
 ):
-    """Update task metadata."""
+    """Edit a task's title or priority."""
     async with _get_session() as session:
-        task = await session.scalar(select(Task).where(Task.id == task_id))
+        task = await session.scalar(
+            select(DashAccTask).where(DashAccTask.id == task_id)
+        )
         if task:
             task.title = title
             task.priority = priority
-            if scheduled_time:
-                try:
-                    task.scheduled_time = datetime.fromisoformat(scheduled_time)
-                except ValueError:
-                    pass
             await session.commit()
+
     return RedirectResponse(url="/", status_code=303)
 
 
 @app.post("/task/complete/{task_id}")
 async def complete_task(task_id: int):
-    """Mark a task as done."""
+    """Mark a task as done from the dashboard."""
     async with _get_session() as session:
-        task = await session.scalar(select(Task).where(Task.id == task_id))
+        task = await session.scalar(
+            select(DashAccTask).where(DashAccTask.id == task_id)
+        )
         if task:
-            task.status = TaskStatus.DONE.value
+            task.status = "done"
             await session.commit()
+
     return RedirectResponse(url="/", status_code=303)
-
-
-@app.post("/session/cancel")
-async def cancel_session():
-    """Cancel the active session."""
-    async with _get_session() as session:
-        await session.execute(
-            update(ActiveSession)
-            .where(ActiveSession.is_active.is_(True))
-            .values(is_active=False)
-        )
-        await session.commit()
-    return RedirectResponse(url="/", status_code=303)
-
-
-@app.get("/api/active-session")
-async def api_active_session():
-    """JSON endpoint for live-polling the active session timer."""
-    async with _get_session() as session:
-        active = await session.scalar(
-            select(ActiveSession).where(ActiveSession.is_active.is_(True)).limit(1)
-        )
-        if not active:
-            return {"active": False}
-
-        task = await session.scalar(select(Task).where(Task.id == active.task_id))
-        elapsed = int((datetime.now() - active.start_time).total_seconds())
-        remaining = None
-        if active.target_end_time:
-            remaining = max(0, int((active.target_end_time - datetime.now()).total_seconds()))
-
-        return {
-            "active": True,
-            "task_title": task.title if task else "Unknown",
-            "elapsed_seconds": elapsed,
-            "remaining_seconds": remaining,
-        }

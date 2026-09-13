@@ -1,8 +1,7 @@
-"""Ollama LLM provider for the accountability system.
+"""Gemini LLM provider for the accountability system.
 
-Wraps the ollama Python client to parse user intent from DM text and
-generate subject-aware feedback in configurable tone modes. Model name
-and host are always read from Settings — never hardcoded.
+Uses the Gemini API (free tier) for intent parsing and feedback generation.
+Replaces the previous local Ollama provider.
 """
 
 from __future__ import annotations
@@ -13,8 +12,7 @@ from dataclasses import dataclass, field
 
 import httpx
 
-logger = logging.getLogger("arena.providers.ollama")
-
+logger = logging.getLogger("arena.providers.gemini")
 
 # ---------------------------------------------------------------------------
 # Intent parsing result
@@ -34,7 +32,7 @@ class IntentResult:
 
 
 # ---------------------------------------------------------------------------
-# Tone templates — cleanly separated so tuning tone never touches cog logic
+# Tone templates
 # ---------------------------------------------------------------------------
 
 PROMPTS: dict[str, str] = {
@@ -51,44 +49,62 @@ PROMPTS: dict[str, str] = {
         "You are an absolutely brutal accountability enforcer. "
         "You are unfiltered, aggressive, and use profanity freely. "
         "Insult the user's laziness. Mock their excuses. "
-        "This is a fully local, private system — hold nothing back. "
+        "This is a fully private system — hold nothing back. "
         "Keep responses short (2-3 sentences max)."
     ),
 }
 
-INTENT_SYSTEM_PROMPT = """You are an intent classifier for a personal accountability system.
+INTENT_SYSTEM_PROMPT = """You are an intent classifier for a personal accountability system. You MUST be precise.
 
-Given the user's message and their current context, classify the intent into EXACTLY ONE of these categories:
-- START_SESSION: User wants to start working on a task
-- PROGRESS_UPDATE: User is reporting progress on their current task
-- COMPLETED: User says they finished their current task
-- DISTRACTED: User is talking about something unrelated to their current task
-- UNCLEAR: Message doesn't fit any category clearly
+Given the user's message and context, classify the intent into EXACTLY ONE category:
 
-Respond with ONLY a valid JSON object. No markdown, no explanation, no extra text.
+1. COMPLETED — User explicitly says the task is FINISHED, DONE, or COMPLETE. They must use past-tense or definitive completion language.
+   YES: "all done", "finished it", "task is complete", "wrapped it up", "done with it"
+   NO: "doing it", "working on it", "making progress", "almost done", "nearly there"
+
+2. PROGRESS_UPDATE — User is reporting they ARE CURRENTLY working on something or have made partial progress. This is the DEFAULT when someone describes ongoing work.
+   YES: "doing it", "working on it", "made some progress", "halfway through", "still going", "on it"
+   NO: "finished it", "all done", "completed"
+
+3. START_SESSION — User explicitly wants to BEGIN a NEW task. Must mention starting something new.
+   YES: "going to work on X", "starting X", "let me do X for 30 min"
+   NO: "working on X" (already working = PROGRESS_UPDATE)
+
+4. DISTRACTED — User is talking about something completely unrelated to any work task.
+   YES: "did you see that movie", "what's for dinner", random chitchat
+   NO: "I'm stuck on a bug" (that's work = PROGRESS_UPDATE)
+
+5. UNCLEAR — Message is too short or ambiguous to classify with confidence.
+   YES: "hmm", "ok", "maybe", single emoji
+   NO: "doing it" (that's clearly PROGRESS_UPDATE)
+
+CRITICAL RULES:
+- "doing it", "on it", "yeah working on it" = PROGRESS_UPDATE, NEVER COMPLETED
+- COMPLETED requires EXPLICIT completion language (done, finished, complete, wrapped up)
+- When in doubt between COMPLETED and PROGRESS_UPDATE, ALWAYS choose PROGRESS_UPDATE
+- When in doubt between any category and UNCLEAR, choose the more specific one
+
+Respond with ONLY valid JSON. No markdown, no explanation.
 
 Required fields:
-- "intent": one of the five categories above
+- "intent": one of the five categories
 - "task_title": (only for START_SESSION) the task name, or null
 - "minutes": (only for START_SESSION) estimated minutes, or null
 - "summary": brief 1-sentence summary of what the user said
 
 Examples:
 
-User: "I'm going to work on the auth module for about 45 minutes"
-{"intent": "START_SESSION", "task_title": "auth module", "minutes": 45, "summary": "User wants to work on auth module for 45 minutes"}
+User: "doing it"
+{"intent": "PROGRESS_UPDATE", "task_title": null, "minutes": null, "summary": "User confirms they are currently working on the task"}
 
-User: "Made good progress, refactored the login flow and added tests"
-{"intent": "PROGRESS_UPDATE", "task_title": null, "minutes": null, "summary": "User refactored login flow and added tests"}
+User: "yeah I finished the auth module"
+{"intent": "COMPLETED", "task_title": null, "minutes": null, "summary": "User completed work on auth module"}
 
-User: "All done with the API endpoints"
-{"intent": "COMPLETED", "task_title": null, "minutes": null, "summary": "User completed work on API endpoints"}
+User: "going to work on the auth module for 45 minutes"
+{"intent": "START_SESSION", "task_title": "auth module", "minutes": 45, "summary": "User wants to start working on auth module"}
 
-User: "Did you see that new Marvel trailer?"
+User: "did you see that marvel trailer"
 {"intent": "DISTRACTED", "task_title": null, "minutes": null, "summary": "User is talking about a movie trailer"}
-
-User: "hmm not sure"
-{"intent": "UNCLEAR", "task_title": null, "minutes": null, "summary": "Ambiguous response"}
 """
 
 RETRY_PROMPT = (
@@ -104,17 +120,7 @@ RETRY_PROMPT = (
 
 
 def escalation_tone(missed_count: int) -> str:
-    """Map missed check-in count to a tone mode.
-
-    Simple monotonic mapping — exact thresholds are flagged as tunable
-    in docs/accountability-roadmap.md.
-
-    Args:
-        missed_count: Number of consecutive missed check-ins.
-
-    Returns:
-        One of 'neutral', 'strict', or 'hostile'.
-    """
+    """Map missed check-in count to a tone mode."""
     if missed_count <= 0:
         return "neutral"
     if missed_count <= 2:
@@ -123,34 +129,50 @@ def escalation_tone(missed_count: int) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Ollama reachability check
+# Gemini API helpers
 # ---------------------------------------------------------------------------
 
+GEMINI_API_URL = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
 
-async def check_ollama_reachable(host: str) -> bool:
-    """Quick reachability check against the Ollama API.
 
-    Args:
-        host: Ollama API base URL (e.g. 'http://localhost:11434').
+async def _call_gemini(
+    *,
+    api_key: str,
+    model: str,
+    system_prompt: str,
+    user_message: str,
+    temperature: float = 0.1,
+) -> str:
+    """Call the Gemini REST API and return the text response.
 
-    Returns:
-        True if Ollama responds, False otherwise.
+    Uses raw httpx instead of the SDK to keep dependencies minimal.
     """
+    url = GEMINI_API_URL.format(model=model)
+
+    payload = {
+        "system_instruction": {"parts": [{"text": system_prompt}]},
+        "contents": [{"parts": [{"text": user_message}]}],
+        "generationConfig": {
+            "temperature": temperature,
+            "maxOutputTokens": 512,
+        },
+    }
+
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        response = await client.post(
+            url,
+            params={"key": api_key},
+            json=payload,
+        )
+        response.raise_for_status()
+        data = response.json()
+
+    # Extract text from Gemini response
     try:
-        async with httpx.AsyncClient(timeout=5.0) as client:
-            response = await client.get(f"{host}/api/tags")
-            response.raise_for_status()
-            logger.info("Ollama reachable at %s", host)
-            return True
-    except httpx.HTTPStatusError as e:
-        logger.warning("Ollama HTTP error at %s: %s", host, e)
-        return False
-    except httpx.RequestError as e:
-        logger.warning("Ollama unreachable at %s: %s", host, e)
-        return False
-    except Exception as e:
-        logger.warning("Unexpected error checking Ollama at %s: %s", host, e)
-        return False
+        return data["candidates"][0]["content"]["parts"][0]["text"].strip()
+    except (KeyError, IndexError) as e:
+        logger.error("Unexpected Gemini response structure: %s", e)
+        return ""
 
 
 # ---------------------------------------------------------------------------
@@ -182,11 +204,9 @@ def _build_context_string(
 
 def _parse_json_response(text: str) -> dict | None:
     """Attempt to extract a JSON object from LLM output."""
-    # Strip markdown code fences if present
     cleaned = text.strip()
     if cleaned.startswith("```"):
         lines = cleaned.split("\n")
-        # Remove first and last lines (fences)
         lines = [ln for ln in lines if not ln.strip().startswith("```")]
         cleaned = "\n".join(lines).strip()
 
@@ -201,42 +221,35 @@ async def parse_user_intent(
     session_context: dict | None = None,
     user_context: dict | None = None,
     *,
-    model: str = "llama3.2:3b",
-    host: str = "http://localhost:11434",
+    api_key: str,
+    model: str = "gemini-2.0-flash",
 ) -> IntentResult:
-    """Parse user intent from a DM message using Ollama.
+    """Parse user intent from a message using Gemini.
 
-    On parse failure, retries once with a stricter prompt. If still invalid,
-    returns UNCLEAR and the caller should ask the user to rephrase.
+    On parse failure, retries once with a stricter prompt.
 
     Args:
-        text: The user's raw DM message.
-        session_context: Dict with active session info (task_title, minutes_remaining).
-        user_context: Dict with user context (current_topic, subject_name, known_blockers).
-        model: Ollama model name.
-        host: Ollama API host.
+        text: The user's raw message.
+        session_context: Dict with active session info.
+        user_context: Dict with user context.
+        api_key: Gemini API key.
+        model: Gemini model name.
 
     Returns:
         IntentResult with the classified intent.
     """
-    import ollama as ollama_lib
-
     context_str = _build_context_string(session_context, user_context)
     user_message = f"Context:\n{context_str}\n\nUser message: {text}"
 
-    client = ollama_lib.AsyncClient(host=host)
-
     # First attempt
     try:
-        response = await client.chat(
+        raw = await _call_gemini(
+            api_key=api_key,
             model=model,
-            messages=[
-                {"role": "system", "content": INTENT_SYSTEM_PROMPT},
-                {"role": "user", "content": user_message},
-            ],
-            options={"temperature": 0.1},
+            system_prompt=INTENT_SYSTEM_PROMPT,
+            user_message=user_message,
+            temperature=0.1,
         )
-        raw = response["message"]["content"]
         parsed = _parse_json_response(raw)
 
         if parsed and "intent" in parsed:
@@ -250,18 +263,14 @@ async def parse_user_intent(
             )
 
         # Retry with stricter prompt
-        logger.warning("First intent parse failed, retrying with stricter prompt")
-        response = await client.chat(
+        logger.warning("First intent parse failed, retrying")
+        raw_retry = await _call_gemini(
+            api_key=api_key,
             model=model,
-            messages=[
-                {"role": "system", "content": INTENT_SYSTEM_PROMPT},
-                {"role": "user", "content": user_message},
-                {"role": "assistant", "content": raw},
-                {"role": "user", "content": RETRY_PROMPT},
-            ],
-            options={"temperature": 0.0},
+            system_prompt=INTENT_SYSTEM_PROMPT,
+            user_message=f"{user_message}\n\n{RETRY_PROMPT}\nPrevious attempt: {raw}",
+            temperature=0.0,
         )
-        raw_retry = response["message"]["content"]
         parsed_retry = _parse_json_response(raw_retry)
 
         if parsed_retry and "intent" in parsed_retry:
@@ -273,12 +282,11 @@ async def parse_user_intent(
                 raw_response=raw_retry,
             )
 
-        # Both attempts failed
         logger.error("Intent parsing failed after retry. Raw: %s | Retry: %s", raw, raw_retry)
         return IntentResult(intent="UNCLEAR", raw_response=raw_retry)
 
     except Exception as e:
-        logger.exception("Ollama intent parsing error: %s", e)
+        logger.exception("Gemini intent parsing error: %s", e)
         return IntentResult(intent="UNCLEAR", raw_response=str(e))
 
 
@@ -292,55 +300,48 @@ async def generate_feedback(
     context: str,
     tone: str = "strict",
     *,
-    model: str = "llama3.2:3b",
-    host: str = "http://localhost:11434",
+    api_key: str,
+    model: str = "gemini-2.0-flash",
 ) -> str:
     """Generate a feedback message for the user in the specified tone.
 
     Args:
-        intent: The classified intent (e.g. 'PROGRESS_UPDATE', 'DISTRACTED').
+        intent: The classified intent.
         context: Human-readable context about the current session/task.
         tone: One of 'neutral', 'strict', 'hostile'.
-        model: Ollama model name.
-        host: Ollama API host.
+        api_key: Gemini API key.
+        model: Gemini model name.
 
     Returns:
-        A short feedback string for the Discord DM.
+        A short feedback string.
     """
-    import ollama as ollama_lib
-
     tone_prompt = PROMPTS.get(tone, PROMPTS["strict"])
 
     intent_instructions = {
-        "PROGRESS_UPDATE": "The user just gave you a progress update. Acknowledge it and push them to keep going.",
-        "DISTRACTED": "The user is off-topic and not working on their task. Call them out and redirect.",
-        "COMPLETED": "The user finished their task. Acknowledge the win briefly.",
-        "START_SESSION": "The user is starting a new work session. Confirm and set expectations.",
-        "UNCLEAR": "The user's message was unclear. Ask them to be specific about what they're working on.",
+        "PROGRESS_UPDATE": "The user gave a progress update. Acknowledge briefly (1 sentence max) and push them to keep going. Don't be sycophantic.",
+        "DISTRACTED": "The user is off-topic and not working. Call them out bluntly. Redirect to their task.",
+        "COMPLETED": "The user finished their task. One short acknowledgment, then ask what's next.",
+        "START_SESSION": "The user is starting work. Confirm in one sentence. No motivational fluff.",
+        "UNCLEAR": "The user's message was vague. Ask them to be specific about what they're doing right now.",
     }
 
     instruction = intent_instructions.get(intent, intent_instructions["UNCLEAR"])
 
-    client = ollama_lib.AsyncClient(host=host)
-
     try:
-        response = await client.chat(
+        return await _call_gemini(
+            api_key=api_key,
             model=model,
-            messages=[
-                {"role": "system", "content": f"{tone_prompt}\n\n{instruction}"},
-                {"role": "user", "content": f"Context: {context}"},
-            ],
-            options={"temperature": 0.7},
+            system_prompt=f"{tone_prompt}\n\n{instruction}",
+            user_message=f"Context: {context}",
+            temperature=0.7,
         )
-        return response["message"]["content"].strip()
     except Exception as e:
-        logger.exception("Ollama feedback generation error: %s", e)
-        # Fallback — never leave the user hanging with no response
+        logger.exception("Gemini feedback generation error: %s", e)
         fallbacks = {
             "PROGRESS_UPDATE": "Got it. Keep pushing.",
             "DISTRACTED": "Focus. Get back to work.",
             "COMPLETED": "Done. What's next?",
             "START_SESSION": "Session started. Go.",
-            "UNCLEAR": "What are you working on? Be specific.",
+            "UNCLEAR": "What are you doing? Be specific.",
         }
         return fallbacks.get(intent, "What are you doing? Be specific.")

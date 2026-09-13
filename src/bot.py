@@ -75,7 +75,14 @@ async def load_extensions(bot: commands.Bot) -> None:
     # Conditionally load the accountability cog — never crash the bot on failure
     settings = get_settings()
     if settings.accountability_enabled:
-        if settings.accountability_user_id and settings.accountability_guild_id:
+        required = {
+            "ACCOUNTABILITY_USER_ID": settings.accountability_user_id,
+            "ACCOUNTABILITY_GUILD_ID": settings.accountability_guild_id,
+            "GEMINI_API_KEY": settings.gemini_api_key,
+        }
+        missing = [k for k, v in required.items() if not v]
+
+        if not missing:
             try:
                 await bot.load_extension("src.cogs.accountability")
                 logger.info(
@@ -86,11 +93,6 @@ async def load_extensions(bot: commands.Bot) -> None:
             except Exception:
                 logger.warning("Accountability cog failed to load — skipping", exc_info=True)
         else:
-            missing = []
-            if not settings.accountability_user_id:
-                missing.append("ACCOUNTABILITY_USER_ID")
-            if not settings.accountability_guild_id:
-                missing.append("ACCOUNTABILITY_GUILD_ID")
             logger.warning(
                 "ACCOUNTABILITY_ENABLED=true but missing %s — skipping",
                 ", ".join(missing),
